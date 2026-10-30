@@ -1,7 +1,8 @@
 // @ts-nocheck
 /**
  * Which spec files a local E2E run executes, and which Evidence Records
- * fixture each needs (EVIDENCE-RECORDS-001C2A).
+ * fixture each needs (EVIDENCE-RECORDS-001C2A; the History spec joined in
+ * 001C2B).
  *
  * Playwright treats every positional argument as a case-insensitive regular
  * expression over each test file's path (`new RegExp(arg, "gi")`, Playwright
@@ -42,6 +43,7 @@
 export const EVIDENCE_SPEC_FIXTURES = Object.freeze({
   "study-records.spec.ts": "study-records",
   "study-records-review.spec.ts": "study-records-review",
+  "study-records-history.spec.ts": "study-records-history",
 });
 
 /** Inert values the Playwright config's guard accepts. None is a credential; none reaches a backend. */

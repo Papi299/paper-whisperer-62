@@ -237,9 +237,9 @@ describe("Edit and Review", () => {
     expect(within(modes).getAllByRole("tab").map((tab) => [tab.textContent, tab.getAttribute("aria-selected")])).toEqual([
       ["Edit", "true"],
       ["Review", "false"],
+      // C2B: History, read-only (StudyRecordHistory.test.tsx).
+      ["History", "false"],
     ]);
-    // No History placeholder (C2B adds it).
-    expect(within(modes).queryByRole("tab", { name: /history/i })).toBeNull();
     expect(within(editPanel()).queryByRole("button", { name: "Confirm against this source" })).toBeNull();
     expect(screen.getByTestId("study-record-source-pane")).toHaveAttribute("data-source-mode", "edit");
 

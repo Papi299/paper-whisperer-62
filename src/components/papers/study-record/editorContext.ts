@@ -13,8 +13,12 @@ export interface ConfirmRequest {
   readonly onConfirm: () => void;
 }
 
-/** Edit holds the draft; Review shows the saved values, one card each (EVIDENCE-RECORDS-001C2A). */
-export type EditorMode = "edit" | "review";
+/**
+ * Edit holds the draft; Review shows the saved values, one card each
+ * (EVIDENCE-RECORDS-001C2A); History lists the committed operations, read-only
+ * (EVIDENCE-RECORDS-001C2B).
+ */
+export type EditorMode = "edit" | "review" | "history";
 
 /**
  * A request to open what holds a target — its collapsed section, and "More

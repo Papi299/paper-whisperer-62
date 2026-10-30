@@ -34,13 +34,20 @@ import { describe, expect, it } from "vitest";
  *     (EVIDENCE-RECORDS-001C2A), and no UI module names the review RPC;
  *   * anything of PR-C2C's: the source rebase (`rebaseSource`,
  *     `prepareRebaseSource`) or its RPC name.
+ *   * a read of `evidence_events` (History, EVIDENCE-RECORDS-001C2B) anywhere
+ *     but `src/lib/studyRecord/historyRead.ts`, or one there without its
+ *     `.eq("user_id", …)` and `.eq("study_id", …)`, or whose projection is
+ *     not a literal list of named columns — `*`, `payload_sha256`, `result`
+ *     and `note` never among them. The general table allow-list does not
+ *     include `evidence_events`: this rule is its only way in.
  * And it checks the positive relationships: the adapter is created exactly
  * once, the editor's default client is that adapter, and the writes the UI
  * makes are exactly the five C1 adapter methods and C2A's `reviewField` — a
  * create only from the store of unresolved creates (C1-R1), which the Start
  * view reaches through `start` and `retry` alone, and every other write from
- * the editor hook. History (C2B) is not read yet: `evidence_events` is not
- * among the tables the UI may read.
+ * the editor hook. History adds reads only: exactly two, in the history read
+ * module, with the projections it reviewed; its hook is, beside
+ * `useStudyRecords`, the only other module that may import the Supabase client.
  *
  * A review-time tripwire like `evidenceDomainBoundary.test.ts`, not the
  * enforcement: RLS, the SELECT-only grants and the RPCs' own checks refuse a
@@ -50,11 +57,15 @@ import { describe, expect, it } from "vitest";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const UI_DIRECTORY = "src/components/papers/study-record";
 const LIB_DIRECTORY = "src/lib/studyRecord";
-const HOOK_FILES = ["src/hooks/useStudyRecords.ts", "src/hooks/useStudyRecordEditor.ts", "src/hooks/useStudyRecordCreations.ts"];
+const HOOK_FILES = ["src/hooks/useStudyRecords.ts", "src/hooks/useStudyRecordEditor.ts", "src/hooks/useStudyRecordCreations.ts", "src/hooks/useStudyRecordHistory.ts"];
 const CREATIONS_FILE = "src/hooks/useStudyRecordCreations.ts";
 const CLIENT_FILE = "src/lib/studyRecord/client.ts";
 const READS_FILE = "src/hooks/useStudyRecords.ts";
 const EDITOR_FILE = "src/hooks/useStudyRecordEditor.ts";
+/** C2B: the History hook, which hands the shared client to the history read module. */
+const HISTORY_HOOK_FILE = "src/hooks/useStudyRecordHistory.ts";
+/** C2B: the one module that reads `evidence_events`. */
+const HISTORY_READ_FILE = "src/lib/studyRecord/historyRead.ts";
 
 const ALLOWED_IMPORTS = new Set([
   "react",
@@ -77,6 +88,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/hooks/useStudyRecords",
   "@/hooks/useStudyRecordCreations",
   "@/hooks/useStudyRecordEditor",
+  "@/hooks/useStudyRecordHistory",
   "@/lib/queryKeys",
   "@/lib/evidenceRecordsAvailability",
   "@/lib/evidence/errors",
@@ -97,6 +109,8 @@ const ALLOWED_IMPORTS = new Set([
   "@/lib/studyRecord/access",
   "@/lib/studyRecord/client",
   "@/lib/studyRecord/draft",
+  "@/lib/studyRecord/historyModel",
+  "@/lib/studyRecord/historyRead",
   "@/lib/studyRecord/jsonbSize",
   "@/lib/studyRecord/labelSuggestion",
   "@/lib/studyRecord/paperGuards",
@@ -112,10 +126,11 @@ const ALLOWED_IMPORTS = new Set([
 const TYPE_ONLY_IMPORTS = new Set(["@/integrations/supabase/types", "@/types/database", "@/integrations/supabase/client", "@/lib/evidence/lifecycleClient"]);
 /** Value imports allowed in one module only. */
 const VALUE_IMPORT_OWNERS: Readonly<Record<string, readonly string[]>> = {
-  "@/integrations/supabase/client": [CLIENT_FILE, READS_FILE],
+  "@/integrations/supabase/client": [CLIENT_FILE, READS_FILE, HISTORY_HOOK_FILE],
   "@/lib/evidence/lifecycleClient": [CLIENT_FILE],
 };
 
+/** The general read allow-list. `evidence_events` is not on it: History's rule below is its only way in. */
 const READ_TABLES = new Set([
   "evidence_studies",
   "evidence_study_reports",
@@ -126,6 +141,10 @@ const READ_TABLES = new Set([
   "evidence_field_anchors",
   "papers",
 ]);
+/** C2B: history, read only by `HISTORY_READ_FILE`, for one user and one study. */
+const HISTORY_TABLE = "evidence_events";
+/** What a history read never selects: request idempotency (`payload_sha256`, `result`), `note`, or everything. */
+const PRIVATE_EVENT_COLUMNS = new Set(["*", "payload_sha256", "result", "note"]);
 const MUTATIONS = new Set(["insert", "upsert", "update", "delete"]);
 const FORBIDDEN_GLOBALS = new Set([
   "fetch",
@@ -278,8 +297,47 @@ function keyName(name: ts.PropertyName): string | null {
   return null;
 }
 
+/** A module's `const NAME = "literal"` declarations: what a projection constant, or a table name kept in one, says. */
+function stringConstants(sourceFile: ts.SourceFile): ReadonlyMap<string, string> {
+  const constants = new Map<string, string>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Const) !== 0) {
+      for (const declaration of node.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer && ts.isStringLiteralLike(declaration.initializer)) {
+          constants.set(declaration.name.text, declaration.initializer.text);
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return constants;
+}
+
+/** A string literal, or a module constant naming one; undefined when it can't be read here. */
+function literalOf(node: ts.Expression | undefined, constants: ReadonlyMap<string, string>): string | undefined {
+  if (!node) return undefined;
+  if (ts.isStringLiteralLike(node)) return node.text;
+  return ts.isIdentifier(node) ? constants.get(node.text) : undefined;
+}
+
+/** What one `.from(table)` call's chain filters on (`.eq` columns) and selects. */
+function chainOf(from: ts.CallExpression): { readonly eq: readonly string[]; readonly select: ts.Expression | undefined } {
+  const eq: string[] = [];
+  let select: ts.Expression | undefined;
+  for (let up: ts.Node | undefined = from.parent; up && (ts.isPropertyAccessExpression(up) || ts.isElementAccessExpression(up) || ts.isCallExpression(up)); up = up.parent) {
+    if (!ts.isCallExpression(up)) continue;
+    const step = memberOf(up.expression);
+    const [first] = up.arguments;
+    if (step?.member === "eq" && first && ts.isStringLiteralLike(first)) eq.push(first.text);
+    if (step?.member === "select") select = first;
+  }
+  return { eq, select };
+}
+
 export function scanStudyRecordSource(file: string, source: string): Violation[] {
   const sourceFile = parse(file, source);
+  const constants = stringConstants(sourceFile);
   const violations: Violation[] = [];
   const report = (node: ts.Node, rule: string) =>
     violations.push({ file, line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1, rule });
@@ -309,7 +367,17 @@ export function scanStudyRecordSource(file: string, source: string): Violation[]
       const access = memberOf(callee);
       if (access && access.member === "from" && !(ts.isIdentifier(access.object) && access.object.text === "Array")) {
         const [table] = node.arguments;
-        if (table && ts.isStringLiteralLike(table) && !READ_TABLES.has(table.text)) report(node, `from("${table.text}")`);
+        const tableName = literalOf(table, constants);
+        if (tableName === HISTORY_TABLE) {
+          // C2B: History is read in one module, for one user and one study, by named columns only.
+          if (file !== HISTORY_READ_FILE) report(node, `${HISTORY_TABLE} read outside ${HISTORY_READ_FILE}`);
+          const chain = chainOf(node);
+          if (!chain.eq.includes("user_id")) report(node, `${HISTORY_TABLE} read without .eq("user_id", …)`);
+          if (!chain.eq.includes("study_id")) report(node, `${HISTORY_TABLE} read without .eq("study_id", …)`);
+          const projection = literalOf(chain.select, constants);
+          if (projection === undefined) report(node, `${HISTORY_TABLE} read with a projection that isn't a literal list of columns`);
+          else for (const column of projection.split(",").map((name) => name.trim()).filter((name) => PRIVATE_EVENT_COLUMNS.has(name))) report(node, `${HISTORY_TABLE} read of ${column}`);
+        } else if (tableName !== undefined && !READ_TABLES.has(tableName)) report(node, `from("${tableName}")`);
         if (table && (ts.isTemplateExpression(table) || ts.isBinaryExpression(table))) report(node, "computed table name");
         const next = node.parent;
         const nextMember = next ? memberOf(next) : null;
@@ -384,6 +452,8 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/FieldEditor.tsx",
       "src/components/papers/study-record/FieldSources.tsx",
       "src/components/papers/study-record/FlagForm.tsx",
+      "src/components/papers/study-record/HistoryEntry.tsx",
+      "src/components/papers/study-record/HistoryPane.tsx",
       "src/components/papers/study-record/RecordPane.tsx",
       "src/components/papers/study-record/ReviewCard.tsx",
       "src/components/papers/study-record/ReviewPane.tsx",
@@ -395,16 +465,20 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/StudyRecordList.tsx",
       "src/components/papers/study-record/StudyRecordStart.tsx",
       "src/components/papers/study-record/editorContext.ts",
+      "src/components/papers/study-record/historyCopy.ts",
       "src/components/papers/study-record/reviewCopy.ts",
       "src/components/papers/study-record/sourcePaneModel.ts",
       "src/components/papers/study-record/studyRecordCopy.ts",
       "src/components/papers/study-record/useReviewFlow.ts",
       "src/hooks/useStudyRecordCreations.ts",
       "src/hooks/useStudyRecordEditor.ts",
+      "src/hooks/useStudyRecordHistory.ts",
       "src/hooks/useStudyRecords.ts",
       "src/lib/studyRecord/access.ts",
       "src/lib/studyRecord/client.ts",
       "src/lib/studyRecord/draft.ts",
+      "src/lib/studyRecord/historyModel.ts",
+      "src/lib/studyRecord/historyRead.ts",
       "src/lib/studyRecord/jsonbSize.ts",
       "src/lib/studyRecord/labelSuggestion.ts",
       "src/lib/studyRecord/paperGuards.ts",
@@ -516,7 +590,52 @@ describe("Study Record UI boundary — the real modules", () => {
       };
       visit(sourceFile);
     }
-    expect([...tables].sort()).toEqual(["evidence_source_snapshots", "evidence_studies", "evidence_study_reports", "papers"]);
+    expect([...tables].sort()).toEqual(["evidence_events", "evidence_source_snapshots", "evidence_studies", "evidence_study_reports", "papers"]);
+  });
+
+  it("reads history in exactly two places, both in the history read module, scoped to the user and the study, with the reviewed projections (C2B)", () => {
+    const reads: { file: string; eq: readonly string[]; columns: string | undefined }[] = [];
+    for (const file of scannedFiles) {
+      const sourceFile = parse(file, read(file));
+      const constants = stringConstants(sourceFile);
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "from") {
+          if (literalOf(node.arguments[0], constants) === HISTORY_TABLE) {
+            const chain = chainOf(node);
+            reads.push({ file, eq: chain.eq, columns: literalOf(chain.select, constants) });
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    // The headers: a version, an op and a time, plus the request id (grouping only) and the owner (a check only).
+    // The changes add the target, field and digests. Never payload_sha256, result or note.
+    expect(reads).toEqual([
+      { file: HISTORY_READ_FILE, eq: ["user_id", "study_id", "ordinal"], columns: "id, user_id, study_id, study_version, ordinal, event_type, request_id, op, occurred_at" },
+      {
+        file: HISTORY_READ_FILE,
+        eq: ["user_id", "study_id", "study_version"],
+        columns: "id, user_id, study_id, study_version, ordinal, event_type, request_id, op, target_id, field_key, before, after, occurred_at",
+      },
+    ]);
+    // No other module names the table at all, even in a string.
+    for (const file of scannedFiles.filter((path) => path !== HISTORY_READ_FILE)) {
+      expect(read(file).includes(`"${HISTORY_TABLE}"`), file).toBe(false);
+    }
+  });
+
+  it("names past operations only through identifier keys: the rebase and review RPC names stay unwritten in every History module (C2B)", () => {
+    for (const file of scannedFiles.filter((path) => /history/i.test(path))) {
+      const sourceFile = parse(file, read(file));
+      const strings: string[] = [];
+      const visit = (node: ts.Node) => {
+        if (ts.isStringLiteralLike(node)) strings.push(node.text);
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      for (const forbidden of [...DEFERRED_STRINGS, ...REVIEW_RPC_STRINGS]) expect(strings, `${file}: "${forbidden}"`).not.toContain(forbidden);
+    }
   });
 });
 
@@ -550,6 +669,62 @@ describe("Study Record UI boundary — negative controls", () => {
     expect(scanStudyRecordSource(COMPONENT, `import type { supabase } from "@/integrations/supabase/client";`)).toEqual([]);
     expect(scanStudyRecordSource(COMPONENT, `import { createEvidenceLifecycleClient } from "@/lib/evidence/lifecycleClient";`).length).toBeGreaterThan(0);
     expect(scanStudyRecordSource(COMPONENT, `import type { EvidenceLifecycleClient } from "@/lib/evidence/lifecycleClient";`)).toEqual([]);
+    // C2B: the History hook hands the client to the read module; the pane and the read module itself may not import it.
+    expect(scanStudyRecordSource(HISTORY_HOOK_FILE, value)).toEqual([]);
+    expect(scanStudyRecordSource("src/components/papers/study-record/HistoryPane.tsx", value).length).toBeGreaterThan(0);
+    expect(scanStudyRecordSource(HISTORY_READ_FILE, value).length).toBeGreaterThan(0);
+  });
+
+  const HISTORY_READ = `
+    const COLUMNS = "id, user_id, study_id, study_version, ordinal, event_type, request_id, op, occurred_at";
+    const rows = client.from("evidence_events").select(COLUMNS).eq("user_id", userId).eq("study_id", studyId).eq("ordinal", 0).limit(11);
+  `;
+
+  it("lets the history read module — and only it — read evidence_events, for one user and one study, by named columns (C2B)", () => {
+    expect(scanStudyRecordSource(HISTORY_READ_FILE, HISTORY_READ)).toEqual([]);
+    // Unauthorized modules: the same read from a component, the hook, another read module or a copy module.
+    for (const file of [
+      "src/components/papers/study-record/HistoryPane.tsx",
+      "src/components/papers/study-record/HistoryEntry.tsx",
+      "src/components/papers/study-record/historyCopy.ts",
+      HISTORY_HOOK_FILE,
+      READS_FILE,
+      LIB,
+      "src/lib/studyRecord/historyModel.ts",
+    ]) {
+      expect(scanStudyRecordSource(file, HISTORY_READ).map((violation) => violation.rule), file).toContain(`evidence_events read outside ${HISTORY_READ_FILE}`);
+    }
+  });
+
+  it.each([
+    // Unscoped reads.
+    ["a read without its user filter", `client.from("evidence_events").select("id, study_version").eq("study_id", studyId);`],
+    ["a read without its study filter", `client.from("evidence_events").select("id, study_version").eq("user_id", userId);`],
+    ["a user filter that isn't equality", `client.from("evidence_events").select("id").neq("user_id", userId).eq("study_id", studyId);`],
+    ["a table name kept in a constant, unscoped", `const table = "evidence_events"; client.from(table).select("id").eq("study_id", studyId);`],
+    // Private or unbounded projections.
+    ["every column", `client.from("evidence_events").select("*").eq("user_id", userId).eq("study_id", studyId);`],
+    ["the request fingerprint", `client.from("evidence_events").select("id, payload_sha256").eq("user_id", userId).eq("study_id", studyId);`],
+    ["the stored result", `client.from("evidence_events").select("id,result").eq("user_id", userId).eq("study_id", studyId);`],
+    ["the note", `client.from("evidence_events").select("id, note").eq("user_id", userId).eq("study_id", studyId);`],
+    ["a projection built at run time", `client.from("evidence_events").select(columns.join(",")).eq("user_id", userId).eq("study_id", studyId);`],
+    ["a projection that isn't a constant", `let columns = "id"; client.from("evidence_events").select(columns).eq("user_id", userId).eq("study_id", studyId);`],
+    ["a select of nothing", `client.from("evidence_events").select().eq("user_id", userId).eq("study_id", studyId);`],
+    // Writes.
+    ["a history insert", `client.from("evidence_events").insert(row);`],
+    ["a history update", `client.from("evidence_events").update({ note }).eq("id", id);`],
+    ["a history delete", `client.from("evidence_events").delete().eq("study_id", studyId);`],
+    ["a history upsert", `client.from("evidence_events").upsert(rows);`],
+    ["a write after a scoped select", `client.from("evidence_events").select("id").eq("user_id", userId).eq("study_id", studyId).update({ op: "x" });`],
+    ["a from() that is not a select", `const q = client.from("evidence_events"); q.select("id").eq("user_id", userId).eq("study_id", studyId);`],
+    // Anything else of the write side, from the history module.
+    ["an RPC", `client.rpc("evidence_save_changes", args);`],
+    ["the source rebase", `client.rebaseSource(request);`],
+    ["a rebase op name", `const op = "rebase_source";`],
+    ["a review op name", `const op = "review_fields";`],
+    ["a forged version", `const shown = { study_version: 3 };`],
+  ])("flags %s in the history read module (C2B)", (_label, source) => {
+    expect(scanStudyRecordSource(HISTORY_READ_FILE, source).length).toBeGreaterThan(0);
   });
 
   it.each([

@@ -351,7 +351,16 @@ export function mapFieldValueRow(row: Row<"evidence_field_values">, references: 
   }));
 }
 
-export function mapEventRow(row: Row<"evidence_events">): MapResult<HistoryEvent> {
+/**
+ * The columns `mapEventRow` reads (EVIDENCE-RECORDS-001C2B): never `user_id`,
+ * `payload_sha256`, `result` or `note`, so a history read need not select them.
+ */
+export type HistoryEventRow = Pick<
+  Row<"evidence_events">,
+  "id" | "study_id" | "study_version" | "ordinal" | "event_type" | "request_id" | "op" | "target_id" | "field_key" | "before" | "after" | "occurred_at"
+>;
+
+export function mapEventRow(row: HistoryEventRow): MapResult<HistoryEvent> {
   const problems: string[] = [];
   const id = toEventId(row.id);
   const studyId = toStudyId(row.study_id);

@@ -139,7 +139,18 @@ describe("value rows", () => {
 describe("history rows", () => {
   it("map a request header and a change event", () => {
     expect(mapEventRow(event)).toMatchObject({ ok: true, value: { ordinal: 0, type: "request", op: "create_study" } });
-    expect(mapEventRow({ ...event, ordinal: 1, event_type: "study_created", op: null, payload_sha256: null, result: null })).toMatchObject({ ok: true, value: { op: null } });
+    // A whole generated row still maps: the mapper takes the columns it reads, and a row has them all.
+    const change: Row<"evidence_events"> = { ...event, ordinal: 1, event_type: "study_created", op: null, payload_sha256: null, result: null };
+    expect(mapEventRow(change)).toMatchObject({ ok: true, value: { op: null } });
+  });
+
+  it("read only the columns a history read selects (C2B): never user_id, payload_sha256, result or note", () => {
+    const { user_id: _user, payload_sha256: _payload, result: _result, note: _note, ...projected } = event;
+    expect(mapEventRow(projected)).toMatchObject({ ok: true, value: { ordinal: 0, type: "request", op: "create_study" } });
+    const mapped = mapEventRow(projected);
+    expect(mapped.ok && Object.keys(mapped.value).sort()).toEqual(
+      ["after", "before", "fieldKey", "id", "occurredAt", "op", "ordinal", "requestId", "studyId", "studyVersion", "targetId", "type"],
+    );
   });
 
   it("refuse a header that is not one, and an unknown event", () => {

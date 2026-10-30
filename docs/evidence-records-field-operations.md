@@ -210,6 +210,8 @@ Append-only. Each committed request writes one header (`ordinal 0`, with the ope
 
 Groups and outcomes are recorded with their labels, as PR-A2 records the study label. A value digest names its state, codes, integers, ids, versions, review and every reference with the `seq` of its copy and its match, but every user text — values, list entries, notes, review notes, locators — and every quote only as `{sha256, chars}` (a list as `{sha256, count}`). No event holds source text, and every payload stays inside the 32 KB PR-A1 allows. `review_reset` is not emitted: `value_saved` records the review it cleared.
 
+The Study Record interface's History mode (EVIDENCE-RECORDS-001C2B, in review and not yet merged) reads these events, read-only, with no new RPC: headers paged by `study_version`, each operation's events by `ordinal`, scoped to the caller and the study and never selecting `payload_sha256`, `result` or `note`. It shows what the digests establish and never presents a fingerprint as text ([evidence-records-study-record-ui.md](evidence-records-study-record-ui.md) §16).
+
 ## 10. Limits
 
 The Product Owner accepted all eight limits PR-A3 introduces, for the owner-only MVP, as part of authorizing the Production migration on 2026-10-18 (§13). They are enforced in Production. The limits PR-A1 and PR-A2 set are unchanged.

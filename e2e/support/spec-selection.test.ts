@@ -36,6 +36,7 @@ describe("the fixture registry", () => {
     expect(EVIDENCE_SPEC_FIXTURES).toEqual({
       "study-records.spec.ts": "study-records",
       "study-records-review.spec.ts": "study-records-review",
+      "study-records-history.spec.ts": "study-records-history",
     });
     expect(Object.isFrozen(EVIDENCE_SPEC_FIXTURES)).toBe(true);
   });
@@ -44,13 +45,27 @@ describe("the fixture registry", () => {
     [["global-setup.ts", "study-records.spec.ts"], ["study-records"]],
     [["global-setup.ts", "study-records-review.spec.ts"], ["study-records-review"]],
     [["global-setup.ts", "study-records-review.spec.ts", "study-records.spec.ts"], ["study-records", "study-records-review"]],
+    // EVIDENCE-RECORDS-001C2B: the History spec has its own fixture, alone or with the others.
+    [["global-setup.ts", "study-records-history.spec.ts"], ["study-records-history"]],
+    [
+      ["global-setup.ts", "study-records-history.spec.ts", "study-records-review.spec.ts", "study-records.spec.ts"],
+      ["study-records", "study-records-history", "study-records-review"],
+    ],
     [["auth.spec.ts", "account-deletion.spec.ts", "ai-model-settings.spec.ts"], []],
   ])("provisions for %j exactly %j", (files, fixtures) => {
     expect([...fixturesForFiles(files)].sort()).toEqual(fixtures);
   });
 
   it("refuses an Evidence Records spec it has no fixture for, rather than lending it another's", () => {
-    for (const file of ["study-records-history.spec.ts", "evidence/study-records.spec.ts", "Study-Records.spec.ts", "study-records.spec.tsx"]) {
+    for (const file of [
+      "study-records-unregistered.spec.ts",
+      "study-records-history-extra.spec.ts",
+      "evidence/study-records-history.spec.ts",
+      "evidence/study-records.spec.ts",
+      "Study-Records.spec.ts",
+      "Study-Records-History.spec.ts",
+      "study-records.spec.tsx",
+    ]) {
       expect(isEvidenceRecordsSpec(file), file).toBe(true);
       expect(() => fixturesForFiles(["study-records.spec.ts", file]), file).toThrow(SpecSelectionError);
       expect(() => fixturesForFiles([file]), file).toThrow(/has no fixture/);
