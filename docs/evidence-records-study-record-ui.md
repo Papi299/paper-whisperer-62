@@ -419,7 +419,7 @@ C2C-A makes a change to the library abstract visible without changing the record
 - **Saved copy N** — "the abstract currently saved with this study record", in full and exact.
 - **Library abstract** — "the abstract currently stored in your paper library", in full and exact, read just now.
 
-Opening Compare reads the library again, and so does **Check again**. **Back to the saved copy** returns focus to the pane's heading. Every text is rendered as plain text nodes with `white-space: pre-wrap`; nothing is injected as HTML.
+Opening Compare reads the library again, and so does **Check again**. A view the user opens — Compare or a saved copy — takes focus at its heading; one shown again after a mode switch leaves focus where the user put it. **Back to the saved copy** returns focus to the pane's heading. Every text is rendered as plain text nodes with `white-space: pre-wrap`; nothing is injected as HTML.
 
 **Earlier saved copies.** When a link has more than one copy, **Saved copies of this abstract (M)** lists them, newest first, from the record's metadata — number, date and length. **Show copy N** opens one: its number, date and length, its exact text, and the saved quotes that name it, marked by their own stored offsets mapped through that copy's own text. A quote of one copy is never marked on another. An earlier copy is read-only: there is no **Use as quote**, and new quotes come from the current copy. A copy also opens from a field's sources in Edit ("From an earlier copy of the abstract" → **Show copy N**), from Review's source focus on a desktop, and inside the Review card on a phone. History stays separate and digest-based: no text is ever rebuilt from it.
 

@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -144,16 +144,11 @@ export function SourceCompare({
   readonly onBack: () => void;
 }) {
   const ids = useId();
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const seq = seqOf(link, copy);
   const [reading, setReading] = useState<Reading>(copy ? "changes" : "library");
   const libraryText = libraryTextOf(status);
   const diff = useMemo(() => (copy && libraryText !== null ? diffSourceText(copy.exactText, libraryText) : null), [copy, libraryText]);
   const capture = status.kind === "ready" && "capture" in status.state ? status.state.capture : null;
-
-  useEffect(() => {
-    headingRef.current?.focus();
-  }, []);
 
   /** In place of a text that needs the library: why it isn't there. */
   const libraryProblem = () => {
@@ -163,7 +158,7 @@ export function SourceCompare({
 
   return (
     <section className="space-y-3" aria-labelledby={`${ids}-heading`} data-testid="source-compare">
-      <h3 ref={headingRef} id={`${ids}-heading`} tabIndex={-1} className="text-sm font-semibold focus:outline-none">
+      <h3 id={`${ids}-heading`} tabIndex={-1} className="text-sm font-semibold focus:outline-none" data-source-view-heading>
         {copy ? SOURCE_COMPARE_COPY.compareHeading : SOURCE_COMPARE_COPY.libraryHeading}
       </h3>
       <p className="text-xs text-muted-foreground">{seq === null ? SOURCE_COMPARE_COPY.informationalNoCopy : SOURCE_COMPARE_COPY.informational(seq)}</p>

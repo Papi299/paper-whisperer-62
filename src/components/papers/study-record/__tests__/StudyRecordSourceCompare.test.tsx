@@ -295,7 +295,7 @@ describe("The source status (C2C-A)", () => {
     expect(banner).toHaveTextContent("showing the library abstract is for information only");
     fireEvent.click(within(banner).getByRole("button", { name: "Show the library abstract" }));
     const compare = await screen.findByTestId("source-compare");
-    expect(within(compare).getByRole("heading", { name: "The abstract in your library" })).toHaveFocus();
+    await waitFor(() => expect(within(compare).getByRole("heading", { name: "The abstract in your library" })).toHaveFocus());
     expect(within(screen.getByRole("tablist", { name: "What to show" })).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Library abstract"]);
     await waitFor(() => expect(within(compare).getByTestId("source-compare-library-text").textContent).toBe(ABSTRACT));
     expect(screen.queryByTestId("use-as-quote-bar")).not.toBeInTheDocument();
@@ -403,7 +403,7 @@ describe("Compare (C2C-A)", () => {
 
   it("opens on the changes: struck through and underlined, said in words, and moved between one by one", async () => {
     const compare = await openCompare();
-    expect(within(compare).getByRole("heading", { name: "Saved copy and library abstract" })).toHaveFocus();
+    await waitFor(() => expect(within(compare).getByRole("heading", { name: "Saved copy and library abstract" })).toHaveFocus());
     const changes = await within(compare).findByTestId("source-compare-changes");
     expect(within(compare).getByTestId("source-compare-summary")).toHaveTextContent("2 places differ: 1 word only in the saved copy, 2 words only in the library abstract.");
     expect(within(compare).getByText("Struck-through text is only in saved copy 1. Underlined text is only in the library abstract. Everything else is in both.")).toBeInTheDocument();
@@ -514,12 +514,18 @@ describe("Compare (C2C-A)", () => {
     expect(within(sourcePane()).queryByTestId("source-compare-open")).not.toBeInTheDocument();
   });
 
-  it("leaves Compare when Review is chosen, and returns to it in Edit", async () => {
-    await openCompare();
+  it("leaves Compare when Review is chosen, and returns to it in Edit — without taking focus from the mode the user chose", async () => {
+    const compare = await openCompare();
+    // The opening's own focus lands first, as it does long before a person can switch modes.
+    await waitFor(() => expect(within(compare).getByRole("heading", { name: "Saved copy and library abstract" })).toHaveFocus());
     chooseMode("Review");
     expect(screen.queryByTestId("source-compare")).not.toBeInTheDocument();
+    const editTab = within(screen.getByRole("tablist", { name: "Study record mode" })).getByRole("tab", { name: "Edit" });
+    editTab.focus();
     chooseMode("Edit");
     expect(await screen.findByTestId("source-compare")).toBeInTheDocument();
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(editTab).toHaveFocus();
   });
 });
 
@@ -549,7 +555,7 @@ describe("Earlier saved copies (C2C-A)", () => {
     const copies = await openCopies();
     fireEvent.click(within(copies).getByRole("button", { name: "Show copy 1" }));
     const earlier = await screen.findByTestId("earlier-copy");
-    expect(within(earlier).getByRole("heading", { name: "Copy 1 of 2 — an earlier saved copy" })).toHaveFocus();
+    await waitFor(() => expect(within(earlier).getByRole("heading", { name: "Copy 1 of 2 — an earlier saved copy" })).toHaveFocus());
     const text = await within(earlier).findByTestId("earlier-copy-text");
     expect(text.textContent).toBe(OLD_ABSTRACT);
     expect([...text.querySelectorAll("mark")].map((mark) => mark.textContent)).toEqual(["type 2 diabetes"]);
@@ -595,6 +601,8 @@ describe("Earlier saved copies (C2C-A)", () => {
     fireEvent.click(within(condition).getByRole("button", { name: "Show copy 1" }));
     const earlier = await screen.findByTestId("earlier-copy");
     expect(await within(earlier).findByTestId("earlier-copy-text")).toHaveTextContent(OLD_ABSTRACT);
+    // The copy the user asked for takes focus, across the dialog.
+    await waitFor(() => expect(within(earlier).getByRole("heading", { name: "Copy 1 of 2 — an earlier saved copy" })).toHaveFocus());
   });
 
   it("opens an earlier copy from Review's source focus, marking that card's quotes only", async () => {
@@ -619,6 +627,7 @@ describe("Earlier saved copies (C2C-A)", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Show the saved abstract" }));
     fireEvent.click(within(card).getByTestId("review-show-earlier-copy"));
     const earlier = await within(card).findByTestId("earlier-copy");
+    await waitFor(() => expect(within(earlier).getByRole("heading", { name: "Copy 1 of 2 — an earlier saved copy" })).toHaveFocus());
     const text = await within(earlier).findByTestId("earlier-copy-text");
     expect(text.textContent).toBe(OLD_ABSTRACT);
     expect([...text.querySelectorAll("mark")].map((mark) => mark.textContent)).toEqual(["type 2 diabetes"]);

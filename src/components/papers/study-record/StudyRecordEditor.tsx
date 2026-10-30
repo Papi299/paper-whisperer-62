@@ -27,6 +27,7 @@ import type { ReviewItem } from "@/lib/studyRecord/reviewModel";
 import { hasErrors, type IssueTarget } from "@/lib/studyRecord/validateDraft";
 import {
   EditorContext,
+  focusOpenedSourceView,
   issueTargetKey,
   useEditor,
   type ConfirmRequest,
@@ -228,6 +229,7 @@ function EditorWorkspace({
       setSourcePaperId(copyPaperId);
       setSourceView(link.currentCopy?.id === snapshotId ? { kind: "current" } : { kind: "copy", snapshotId });
       if (isMobile) setTab("source");
+      focusOpenedSourceView(() => containerRef.current?.querySelector<HTMLElement>("[data-testid='study-record-source-pane']"));
     },
     [base.links, isMobile],
   );

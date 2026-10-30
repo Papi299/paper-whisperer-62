@@ -93,6 +93,24 @@ export function useEditor(): EditorContextValue {
   return context;
 }
 
+/**
+ * Focus the heading of a Source-pane view the user has just opened (C2C-A) —
+ * the comparison or a saved copy — once it is on screen: a tab switch on a
+ * phone can take a frame or two, so this waits up to a few frames. Only an
+ * explicit opening moves focus; a view shown again after a mode switch keeps
+ * focus where the user put it.
+ */
+export function focusOpenedSourceView(root: () => HTMLElement | null | undefined, framesLeft = 6) {
+  requestAnimationFrame(() => {
+    const heading = root()?.querySelector<HTMLElement>("[data-source-view-heading]");
+    if (!heading || heading.closest("[hidden], [data-state='inactive']")) {
+      if (framesLeft > 0) focusOpenedSourceView(root, framesLeft - 1);
+      return;
+    }
+    heading.focus();
+  });
+}
+
 /** Whether `request` asks to reveal `target`. */
 export function revealsTarget(request: RevealRequest | null, target: IssueTarget): boolean {
   return request !== null && issueTargetKey(request.target) === issueTargetKey(target);

@@ -11,7 +11,7 @@ import { parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft"
 import { addQuoteToEdit, quoteChoiceFromSelection } from "@/lib/studyRecord/quotes";
 import { reviewCopyFocus, type ReviewItem } from "@/lib/studyRecord/reviewModel";
 import { EarlierCopy, SavedCopiesList } from "./EarlierCopy";
-import { useEditor, type SourceView } from "./editorContext";
+import { focusOpenedSourceView, useEditor, type SourceView } from "./editorContext";
 import { formatRecordDate, REVIEW_COPY, reviewItemLabel } from "./reviewCopy";
 import { SavedCopyText } from "./SavedCopyText";
 import { SourceCompare, SourceStatusBanner } from "./SourceCompare";
@@ -113,10 +113,11 @@ export function SourcePane({
     [library.isFetching, library.isError, library.error, library.data, copyText],
   );
   const checkAgain = useCallback(() => void library.refetch(), [library]);
+  /** Open a view the user asked for: it takes focus, and Compare reads the library afresh (saying so while it does). */
   const showView = (next: SourceView) => {
     editor.setSourceView(next);
-    // Compare reads the library afresh; the view it opens says so while it does.
     if (next.kind === "compare") void library.refetch();
+    focusOpenedSourceView(() => rootRef.current);
   };
   const backToCurrent = () => {
     editor.setSourceView({ kind: "current" });
@@ -250,7 +251,7 @@ export function SourcePane({
             item={reviewItem}
             paperId={link?.link.paperId ?? null}
             shownCopyId={earlier?.id ?? null}
-            onShowCopy={(snapshotId) => editor.setSourceView({ kind: "copy", snapshotId })}
+            onShowCopy={(snapshotId) => showView({ kind: "copy", snapshotId })}
           />
         )}
         {editor.links.length > 1 && (

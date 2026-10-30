@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useSavedCopy } from "@/hooks/useStudyRecords";
@@ -104,7 +104,6 @@ export function EarlierCopy({
 }) {
   const editor = useEditor();
   const ids = useId();
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const read = useSavedCopy(editor.userId, editor.base.header.id, info);
   const copy = read.data ?? null;
   const map = useMemo(() => (copy ? normalizeEvidenceV1WithMap(copy.exactText) : null), [copy]);
@@ -114,13 +113,9 @@ export function EarlierCopy({
   const currentSeq = link.snapshots[total - 1]?.seq ?? info.seq;
   const integrity = read.error instanceof StudyRecordReadError && read.error.kind === "integrity";
 
-  useEffect(() => {
-    headingRef.current?.focus();
-  }, [info.id]);
-
   return (
     <section className="space-y-2" aria-labelledby={`${ids}-heading`} data-testid="earlier-copy" data-copy-seq={info.seq}>
-      <h3 ref={headingRef} id={`${ids}-heading`} tabIndex={-1} className="break-words text-sm font-semibold focus:outline-none [overflow-wrap:anywhere]">
+      <h3 id={`${ids}-heading`} tabIndex={-1} className="break-words text-sm font-semibold focus:outline-none [overflow-wrap:anywhere]" data-source-view-heading>
         {SOURCE_COMPARE_COPY.earlierHeading(info.seq, total)}
       </h3>
       <p className="text-xs text-muted-foreground">{SOURCE_COMPARE_COPY.earlierMeta(formatRecordDate(info.capturedAt), info.charCount)}</p>
