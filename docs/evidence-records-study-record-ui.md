@@ -198,8 +198,8 @@ The report of EVIDENCE-RECORDS-001C1-PROD-ACCEPTANCE-EXEC-001 gives the verdict 
 
 **Tests.**
 
-- **Vitest:** `reviewModel.test.ts`, `useStudyRecordReview.test.tsx`, `StudyRecordReview.test.tsx` and `reviewCopy.test.ts`, plus the boundary test. That test allows `reviewField` and `prepareReviewField` in the editor hook only, and still forbids the rebase; history is read in the history read module only (§16).
-- **E2E:** `e2e/study-records-review.spec.ts` has its own disposable fixture, `scripts/e2e-local-review-fixture.mjs`. Afterwards it proves, as the database owner, each value's status, note, versions and review events, then removes its accounts and verifies they are gone. The `e2e-evidence` job runs it after the C1 spec: `npm run test:e2e:local -- e2e/study-records.spec.ts e2e/study-records-review.spec.ts`.
+- **Vitest:** `reviewModel.test.ts`, `useStudyRecordReview.test.tsx`, `StudyRecordReview.test.tsx` and `reviewCopy.test.ts`, plus the boundary test. At the C2A release, the boundary permitted `reviewField` and `prepareReviewField` in the editor hook alone, and no rebase write anywhere. The current boundary also permits `prepareRebaseSource` and `rebaseSource` there alone, while the rebase RPC and operation names stay forbidden in every UI module, the hook included (§19); History reads remain restricted to their dedicated module (§16).
+- **E2E:** `e2e/study-records-review.spec.ts` has its own disposable fixture, `scripts/e2e-local-review-fixture.mjs`. Afterwards it proves, as the database owner, each value's status, note, versions and review events, then removes its accounts and verifies they are gone. At the C2A release, the `e2e-evidence` lane ran the C1 and C2A specs (`e2e/study-records.spec.ts`, `e2e/study-records-review.spec.ts`). The current lane also runs the later Evidence Records specs; its authoritative spec list is in `.github/workflows/e2e-local.yml`.
 - **Fixture selection:** the lifecycle asks Playwright which files it will run, and gives each Evidence Records spec its own fixture (`scripts/e2e-local-spec-selection.mjs`). An Evidence Records spec without one fails closed.
 
 **Limits.**
