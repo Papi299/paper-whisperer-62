@@ -3,14 +3,16 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { EvidenceError } from "@/lib/evidence/errors";
 import {
   EVIDENCE_FIELD_LIMITS,
+  prepareRebaseSource,
   prepareReviewField,
   prepareSaveChanges,
+  type RebaseSourceRequest,
   type ReviewAction,
   type ReviewFieldRequest,
   type SaveChangesRequest,
 } from "@/lib/evidence/fieldRequests";
-import type { ArmId, OutcomeId, StudyId, ValueId } from "@/lib/evidence/ids";
-import type { EvidenceLifecycleClient } from "@/lib/evidence/lifecycleClient";
+import type { ArmId, OutcomeId, PaperId, StudyId, ValueId } from "@/lib/evidence/ids";
+import type { EvidenceLifecycleClient, RebaseSourceResult } from "@/lib/evidence/lifecycleClient";
 import {
   prepareDeleteStudy,
   prepareSetLink,
@@ -37,6 +39,7 @@ import { jsonbTextByteLength } from "@/lib/studyRecord/jsonbSize";
 import type { StudyRecordData } from "@/lib/studyRecord/read";
 import { buildReviewItems, describeRecordSources, reviewTargetState, type ReviewActivity } from "@/lib/studyRecord/reviewModel";
 import { planSave, resolveBatchRefs, type SaveStep } from "@/lib/studyRecord/savePlan";
+import { abstractSha256, checkSourceUpdateCandidate, type AbstractDigest, type SourceUpdateCandidate } from "@/lib/studyRecord/sourceUpdate";
 import { hasErrors, validateDraft, type DraftIssue, type IssueTarget } from "@/lib/studyRecord/validateDraft";
 
 /**
@@ -77,6 +80,33 @@ import { hasErrors, validateDraft, type DraftIssue, type IssueTarget } from "@/l
  *   * on success the record is read back (`reconcile`, as after a link
  *     change). A review changes no `value_version`, so every unsaved edit
  *     stays exactly as it was.
+ * An open Flag note lives here too (`flagNotes`, G3), not in its card: it
+ * survives a mode switch and a filter that hides its card, and the editor can
+ * see that it is open.
+ *
+ * "Use current abstract" (EVIDENCE-RECORDS-001C2C-B) is the third kind of
+ * write, under the same rules again. `updateSource` saves the library abstract
+ * the comparison displayed as a link's new saved copy — or its first — through
+ * `evidence_rebase_source`:
+ *   * it is offered only to a user who may write, with no unsaved edit, no
+ *     open Flag note, nothing else in flight or in doubt and no sign of a
+ *     change made elsewhere (`sourceUpdateHold`), and only for a candidate
+ *     taken from the record as loaded (`checkSourceUpdateCandidate`); each is
+ *     checked again here, at the write, whatever the button showed;
+ *   * one confirmation is one request: the SHA-256 of the exact text displayed
+ *     (`abstractSha256`), prepared once with one request id. Without Web
+ *     Crypto, or when the digest fails, nothing is sent;
+ *   * while its outcome is unknown the request is kept, every other write and
+ *     edit waits, and "Try again" (`retrySourceUpdate`) resends THAT request —
+ *     the server replays it instead of saving a second copy. Reloading abandons
+ *     it, and the record read back shows whether it was saved;
+ *   * a refusal is reported as the server classified it, and its request is
+ *     retired. `source_changed_again` needs a fresh read of the library
+ *     abstract and a new confirmation; a version conflict, a reload; any other
+ *     refusal, a reload before another attempt;
+ *   * on success the record is read back, checked against the server's answer,
+ *     and the draft — which had no unsaved edit, and could take none while the
+ *     write ran — starts again from it, so no reference to the old copy stays.
  */
 
 
@@ -136,8 +166,69 @@ export interface ReviewTarget {
   readonly shownVersion: number;
 }
 
+/** Why "Use current abstract" sent nothing. */
+export type SourceUpdateNotSent =
+  /** The record, the link or its copy changed since the abstract was shown, or the library was not read again after it changed. */
+  | "stale"
+  /** The abstract can't be a saved copy (too long, empty, the copy limit). */
+  | "ineligible"
+  /** This browser has no Web Crypto digest. */
+  | "digest_unavailable"
+  | "digest_failed"
+  /** The request could not be prepared. */
+  | "invalid_request";
+
+/**
+ * "Use current abstract" — the rebase — from confirmation to its answer
+ * (EVIDENCE-RECORDS-001C2C-B). `paperId` is the link it is for.
+ */
+export type SourceUpdateState =
+  | { readonly status: "idle" }
+  /** Computing the SHA-256 of the confirmed text: nothing is sent yet. */
+  | { readonly status: "preparing"; readonly paperId: PaperId }
+  | { readonly status: "working"; readonly paperId: PaperId }
+  /** The server answered — `result.status` says how — and the record was read back. */
+  | { readonly status: "done"; readonly paperId: PaperId; readonly result: RebaseSourceResult }
+  /** The server answered, but the record couldn't be read back as it said: the copy is saved — reload to see it. */
+  | { readonly status: "reload_failed"; readonly paperId: PaperId; readonly result: RebaseSourceResult }
+  /** Nothing was sent. */
+  | { readonly status: "not_sent"; readonly paperId: PaperId; readonly reason: SourceUpdateNotSent }
+  /** The library abstract is no longer the text the user saw: read it again, then confirm again. */
+  | { readonly status: "source_changed"; readonly paperId: PaperId; readonly error: EvidenceError }
+  /** The record changed elsewhere: reload. */
+  | { readonly status: "conflict"; readonly paperId: PaperId; readonly error: EvidenceError }
+  /** The account may no longer write study records. */
+  | { readonly status: "not_enabled"; readonly paperId: PaperId; readonly error: EvidenceError }
+  /** Any other refusal: nothing was saved, and another attempt waits for a reload. */
+  | { readonly status: "failed"; readonly paperId: PaperId; readonly error: EvidenceError }
+  /** The outcome is unknown, or the request failed for a reason worth resending as is: Try again resends the SAME request. */
+  | { readonly status: "uncertain"; readonly paperId: PaperId; readonly error: EvidenceError };
+
+/** Why "Use current abstract" waits, in the order it is checked. */
+export type SourceUpdateHold =
+  /** Another write is in flight. */
+  | "busy"
+  /** An earlier action's outcome is unknown, or the record must be reloaded. */
+  | "unresolved"
+  /** The record was changed elsewhere: reload first. */
+  | "changed_elsewhere"
+  /** The draft has unsaved edits: save or undo them first. */
+  | "unsaved_changes"
+  /** A Flag note is open in Review: send or cancel it first. */
+  | "flag_open"
+  /** The last attempt was refused for a reason a reload must clear. */
+  | "refused";
+
+/** What became of one confirmation of "Use current abstract" (or of Try again). */
+export type SourceUpdateOutcome =
+  | { readonly kind: "done"; readonly status: RebaseSourceResult["status"] }
+  | { readonly kind: "failed" }
+  | { readonly kind: "not_sent" };
+
 const NOT_SENT: ReviewOutcome = Object.freeze({ kind: "not_sent" });
 const FAILED: ReviewOutcome = Object.freeze({ kind: "failed" });
+const SOURCE_NOT_SENT: SourceUpdateOutcome = Object.freeze({ kind: "not_sent" });
+const SOURCE_FAILED: SourceUpdateOutcome = Object.freeze({ kind: "failed" });
 
 interface SaveRun {
   readonly steps: readonly SaveStep[];
@@ -159,6 +250,8 @@ export interface UseStudyRecordEditorArgs {
   readonly canWrite: boolean;
   readonly client?: EvidenceLifecycleClient;
   readonly newRequestId?: () => string;
+  /** The SHA-256 of an abstract as displayed (Web Crypto). */
+  readonly digest?: (text: string) => Promise<AbstractDigest>;
 }
 
 /** Where a server refusal points: the input it is about, when it names one. */
@@ -185,6 +278,7 @@ export function useStudyRecordEditor({
   canWrite,
   client = studyRecordClient,
   newRequestId = newStudyRecordRequestId,
+  digest = abstractSha256,
 }: UseStudyRecordEditorArgs) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<StudyRecordDraft>(() => createDraft(base));
@@ -194,17 +288,28 @@ export function useStudyRecordEditor({
   const [linkAction, setLinkAction] = useState<WriteActionState>({ status: "idle" });
   const [deletion, setDeletion] = useState<WriteActionState>({ status: "idle" });
   const [reviewAction, setReviewAction] = useState<ReviewActionState>({ status: "idle" });
+  const [sourceUpdate, setSourceUpdate] = useState<SourceUpdateState>({ status: "idle" });
+  // G3: each open Flag note, by value — kept across a mode switch and a filter that hides its card.
+  const [flagNotes, setFlagNotes] = useState<ReadonlyMap<ValueId, string>>(() => new Map());
   const runRef = useRef<SaveRun | null>(null);
   const busyRef = useRef(false);
   const linkRequestRef = useRef<SetLinkRequest | null>(null);
   const deleteRequestRef = useRef<DeleteStudyRequest | null>(null);
   const reviewRequestRef = useRef<ReviewFieldRequest | null>(null);
+  const sourceRequestRef = useRef<RebaseSourceRequest | null>(null);
+  // Set the moment a rebase starts, cleared only once its outcome is known: no edit or write slips in before a render.
+  const sourceLockRef = useRef(false);
+  // When the server last said the library abstract changed again: a new attempt needs a read finished after it.
+  const sourceChangedAtRef = useRef(0);
 
   const baseValues = useMemo(() => indexBaseValues(base), [base]);
   const issues = useMemo(() => validateDraft(base, baseValues, draft), [base, baseValues, draft]);
   const dirty = useMemo(() => isDraftDirty(base, draft), [base, draft]);
+  /** The open Flag notes of values the record still has. */
+  const openFlagIds = useMemo(() => base.values.filter((value) => flagNotes.has(value.id)).map((value) => value.id), [base.values, flagNotes]);
 
   const reviewPending = reviewAction.status === "working" || reviewAction.status === "uncertain";
+  const sourceUpdatePending = sourceUpdate.status === "preparing" || sourceUpdate.status === "working" || sourceUpdate.status === "uncertain";
   const locked =
     save.status === "saving" ||
     save.status === "uncertain" ||
@@ -213,20 +318,28 @@ export function useStudyRecordEditor({
     save.status === "reload_failed" ||
     linkAction.status === "working" ||
     deletion.status === "working" ||
-    reviewPending;
+    reviewPending ||
+    sourceUpdatePending;
   const canEdit = canWrite && !locked;
 
   // Whether a review may start (Review mode's model, §E5 rows 1–3): every other
   // write in flight or in doubt, and every sign the record changed elsewhere,
   // holds it. A review in doubt holds the others in turn, through `locked`.
   const reviewActivity: ReviewActivity =
-    save.status === "saving" || linkAction.status === "working" || deletion.status === "working" || reviewAction.status === "working"
+    save.status === "saving" ||
+    linkAction.status === "working" ||
+    deletion.status === "working" ||
+    reviewAction.status === "working" ||
+    sourceUpdate.status === "preparing" ||
+    sourceUpdate.status === "working"
       ? "busy"
       : save.status === "uncertain" ||
           save.status === "reload_failed" ||
           linkAction.status === "uncertain" ||
           deletion.status === "uncertain" ||
-          reviewAction.status === "uncertain"
+          reviewAction.status === "uncertain" ||
+          sourceUpdate.status === "uncertain" ||
+          sourceUpdate.status === "reload_failed"
         ? "unresolved"
         : save.status === "conflict" || externalChange || (deletion.status === "failed" && deletion.error.kind === "version_conflict")
           ? "changed_elsewhere"
@@ -238,6 +351,19 @@ export function useStudyRecordEditor({
     [base, draft, reviewActivity, reviewSources, reviewWritable],
   );
 
+  // Whether "Use current abstract" may start (C2C-B): the review's holds, then
+  // an unsaved edit, an open Flag note, and a refusal only a reload clears.
+  const sourceUpdateHold: SourceUpdateHold | null =
+    reviewActivity !== "idle"
+      ? reviewActivity
+      : dirty
+        ? "unsaved_changes"
+        : openFlagIds.length > 0
+          ? "flag_open"
+          : sourceUpdate.status === "failed"
+            ? "refused"
+            : null;
+
   const invalidateSummaries = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.studyRecords.all(userId) });
   }, [queryClient, userId]);
@@ -245,7 +371,7 @@ export function useStudyRecordEditor({
   /** Apply a draft change. Refused while the editor is locked or the user may not edit. */
   const update = useCallback(
     (change: (draft: StudyRecordDraft) => StudyRecordDraft) => {
-      if (!canEdit) return;
+      if (!canEdit || sourceLockRef.current) return;
       setDraft((current) => change(current));
       setSave((current) => (current.status === "saved" || current.status === "invalid" ? { status: "idle" } : current));
     },
@@ -280,7 +406,7 @@ export function useStudyRecordEditor({
   );
 
   const runSave = useCallback(async () => {
-    if (busyRef.current || !canWrite || reviewPending) return;
+    if (busyRef.current || sourceLockRef.current || !canWrite || reviewPending || sourceUpdatePending) return;
     busyRef.current = true;
     try {
       let run = runRef.current;
@@ -360,12 +486,13 @@ export function useStudyRecordEditor({
     } finally {
       busyRef.current = false;
     }
-  }, [base, baseValues, canWrite, client, draft, finishPartial, knownVersion, newRequestId, reconcile, reviewPending, studyId]);
+  }, [base, baseValues, canWrite, client, draft, finishPartial, knownVersion, newRequestId, reconcile, reviewPending, sourceUpdatePending, studyId]);
 
   /**
    * Re-read the record and start the draft again from it. Edits are discarded:
-   * the caller confirms first. A review whose outcome is in doubt is abandoned:
-   * the record read back shows whether it was recorded.
+   * the caller confirms first. A review or a rebase whose outcome is in doubt
+   * is abandoned: the record read back shows whether it was recorded. An open
+   * Flag note is kept.
    */
   const reload = useCallback(async () => {
     if (busyRef.current) return;
@@ -373,7 +500,10 @@ export function useStudyRecordEditor({
     try {
       runRef.current = null;
       reviewRequestRef.current = null;
+      sourceRequestRef.current = null;
+      sourceLockRef.current = false;
       setReviewAction({ status: "idle" });
+      setSourceUpdate({ status: "idle" });
       const fresh = await refetch();
       if (fresh === undefined) {
         setSave({ status: "reload_failed", applied: 0, total: 0 });
@@ -396,7 +526,7 @@ export function useStudyRecordEditor({
   /** Confirm or mark provisional the link to `paperId`. Retrying an unknown outcome resends the same request. */
   const changeLinkStatus = useCallback(
     async (paperId: string, action: Exclude<LinkAction, "remove">) => {
-      if (busyRef.current || !canWrite || dirtyLocked(save) || reviewPending) return;
+      if (busyRef.current || sourceLockRef.current || !canWrite || dirtyLocked(save) || reviewPending || sourceUpdatePending) return;
       busyRef.current = true;
       try {
         let request = linkRequestRef.current;
@@ -427,17 +557,17 @@ export function useStudyRecordEditor({
         busyRef.current = false;
       }
     },
-    [canWrite, client, knownVersion, newRequestId, reconcile, reviewPending, save, studyId],
+    [canWrite, client, knownVersion, newRequestId, reconcile, reviewPending, save, sourceUpdatePending, studyId],
   );
 
   /**
    * Delete the study record. Not gated: whoever owns it can always delete it.
-   * It waits only while a review is in flight or in doubt (try that again or
-   * reload first). Resolves to true when it is gone (deleted now, or already
-   * absent).
+   * It waits only while a review or a rebase is in flight or in doubt (try that
+   * again or reload first). Resolves to true when it is gone (deleted now, or
+   * already absent).
    */
   const deleteStudy = useCallback(async (): Promise<boolean> => {
-    if (busyRef.current || reviewPending) return false;
+    if (busyRef.current || sourceLockRef.current || reviewPending || sourceUpdatePending) return false;
     busyRef.current = true;
     try {
       let request = deleteRequestRef.current;
@@ -465,10 +595,34 @@ export function useStudyRecordEditor({
     } finally {
       busyRef.current = false;
     }
-  }, [client, invalidateSummaries, knownVersion, newRequestId, queryClient, reviewPending, studyId, userId]);
+  }, [client, invalidateSummaries, knownVersion, newRequestId, queryClient, reviewPending, sourceUpdatePending, studyId, userId]);
 
   const clearDeletionError = useCallback(() => setDeletion({ status: "idle" }), []);
   const clearLinkError = useCallback(() => setLinkAction({ status: "idle" }), []);
+
+  /** G3: open the Flag note of one saved value — starting from its current flag's note, if it has one. A note already open is kept as typed. */
+  const openFlag = useCallback(
+    (valueId: ValueId) => {
+      const value = base.values.find((candidate) => candidate.id === valueId);
+      if (!value) return;
+      const start = value.review.status === "disputed" ? value.review.note ?? "" : "";
+      setFlagNotes((current) => (current.has(valueId) ? current : new Map(current).set(valueId, start)));
+    },
+    [base.values],
+  );
+  /** G3: the note as the user types it. Only an open note changes. */
+  const editFlagNote = useCallback((valueId: ValueId, note: string) => {
+    setFlagNotes((current) => (current.has(valueId) && current.get(valueId) !== note ? new Map(current).set(valueId, note) : current));
+  }, []);
+  /** G3: close a Flag note — after Cancel, or once the flag is recorded. */
+  const closeFlag = useCallback((valueId: ValueId) => {
+    setFlagNotes((current) => {
+      if (!current.has(valueId)) return current;
+      const next = new Map(current);
+      next.delete(valueId);
+      return next;
+    });
+  }, []);
 
   /** Send one prepared review and route its answer. The request is kept only while its outcome is in doubt. */
   const sendReview = useCallback(
@@ -491,6 +645,8 @@ export function useStudyRecordEditor({
         return FAILED;
       }
       reviewRequestRef.current = null;
+      // A recorded flag closes its note — whether the first press or Try again recorded it.
+      if (request.action === "flag") closeFlag(request.valueId);
       // A review changes no value_version, so reading back keeps every unsaved edit as it is.
       const settled = await reconcile(outcome.result.studyVersion, [], new Map(), new Map());
       setReviewAction({ status: "idle" });
@@ -498,7 +654,7 @@ export function useStudyRecordEditor({
       if (settled === "reload_failed") setSave({ status: "reload_failed", applied: 0, total: 0 });
       return Object.freeze({ kind: "done", status: outcome.result.status, reviewStatus: outcome.result.reviewStatus });
     },
-    [client, reconcile],
+    [client, closeFlag, reconcile],
   );
 
   /**
@@ -509,7 +665,7 @@ export function useStudyRecordEditor({
    */
   const review = useCallback(
     async (target: ReviewTarget, action: ReviewAction, note: string | null): Promise<ReviewOutcome> => {
-      if (busyRef.current || !reviewWritable || reviewActivity !== "idle") return NOT_SENT;
+      if (busyRef.current || sourceLockRef.current || !reviewWritable || reviewActivity !== "idle") return NOT_SENT;
       const state = reviewTargetState(reviewItems, target.valueId, target.shownVersion);
       if (state.kind !== "current") {
         // The card no longer shows the saved value: send nothing, and say a reload is needed.
@@ -558,6 +714,140 @@ export function useStudyRecordEditor({
   /** Dismiss a refused review. A review in doubt is not dismissed: try it again or reload. */
   const clearReviewError = useCallback(() => setReviewAction((current) => (current.status === "failed" ? { status: "idle" } : current)), []);
 
+  /**
+   * Send one prepared rebase and route its answer (C2C-B). The request is kept
+   * only while its outcome is in doubt; on any answer the record is read back
+   * and checked against it, and the draft starts again from the record.
+   */
+  const sendSourceUpdate = useCallback(
+    async (request: RebaseSourceRequest): Promise<SourceUpdateOutcome> => {
+      const { paperId } = request;
+      setSourceUpdate({ status: "working", paperId });
+      const outcome = await client.rebaseSource(request);
+      if (!outcome.ok) {
+        const { error } = outcome;
+        if (error.retry === "same_request") {
+          // Keep the prepared request — and the lock: Try again resends it, and the server replays it if it was applied.
+          setSourceUpdate({ status: "uncertain", paperId, error });
+          return SOURCE_FAILED;
+        }
+        sourceRequestRef.current = null;
+        sourceLockRef.current = false;
+        if (error.kind === "source_changed_again") {
+          sourceChangedAtRef.current = Date.now();
+          setSourceUpdate({ status: "source_changed", paperId, error });
+        } else if (error.kind === "version_conflict") {
+          setSourceUpdate({ status: "conflict", paperId, error });
+          setSave({ status: "conflict", applied: 0, total: 0 });
+        } else if (error.kind === "records_not_enabled") {
+          setSourceUpdate({ status: "not_enabled", paperId, error });
+          setSave({ status: "not_enabled", applied: 0, total: 0 });
+        } else {
+          setSourceUpdate({ status: "failed", paperId, error });
+          if (error.kind === "study_not_found") setSave({ status: "gone" });
+        }
+        return SOURCE_FAILED;
+      }
+      sourceRequestRef.current = null;
+      const { result } = outcome;
+      setKnownVersion(result.studyVersion);
+      invalidateSummaries();
+      const fresh = await refetch();
+      sourceLockRef.current = false;
+      if (fresh === null) {
+        setSourceUpdate({ status: "done", paperId, result });
+        setSave({ status: "gone" });
+        return Object.freeze({ kind: "done", status: result.status });
+      }
+      // The record read back must hold what the server reported: at its version, the link's current copy is the answer's.
+      const sameVersion = fresh !== undefined && fresh.header.version === result.studyVersion;
+      const current = fresh?.links.find((link) => link.link.paperId === paperId)?.currentCopy ?? null;
+      if (fresh === undefined || (sameVersion && (current?.id !== result.snapshotId || current.seq !== result.seq))) {
+        setSourceUpdate({ status: "reload_failed", paperId, result });
+        setSave({ status: "reload_failed", applied: 0, total: 0 });
+        return Object.freeze({ kind: "done", status: result.status });
+      }
+      if (!sameVersion) setExternalChange(true);
+      // Sent only with no unsaved edit, and no edit could start while it ran: the draft starts again from the record read back.
+      setDraft(createDraft(fresh));
+      setSourceUpdate({ status: "done", paperId, result });
+      return Object.freeze({ kind: "done", status: result.status });
+    },
+    [client, invalidateSummaries, refetch],
+  );
+
+  /**
+   * "Use current abstract": save `candidate` — the library abstract exactly as
+   * the comparison displayed it — as its link's new saved copy. Sends nothing
+   * unless the action is offered now and the candidate was taken from the
+   * record as loaded (and, after the server said the library changed again,
+   * from a read finished since). One confirmation is one request, with a new
+   * request id; nothing is retried by itself.
+   */
+  const updateSource = useCallback(
+    async (candidate: SourceUpdateCandidate): Promise<SourceUpdateOutcome> => {
+      if (busyRef.current || sourceLockRef.current || !reviewWritable || sourceUpdateHold !== null) return SOURCE_NOT_SENT;
+      const check = checkSourceUpdateCandidate(base, knownVersion, candidate);
+      if (check.kind !== "ready" || candidate.readAt <= sourceChangedAtRef.current) {
+        setSourceUpdate({ status: "not_sent", paperId: candidate.paperId, reason: check.kind === "ineligible" ? "ineligible" : "stale" });
+        return SOURCE_NOT_SENT;
+      }
+      busyRef.current = true;
+      sourceLockRef.current = true;
+      try {
+        setSourceUpdate({ status: "preparing", paperId: candidate.paperId });
+        const sha = await digest(candidate.text);
+        if (!sha.ok) {
+          sourceLockRef.current = false;
+          setSourceUpdate({ status: "not_sent", paperId: candidate.paperId, reason: sha.reason === "unavailable" ? "digest_unavailable" : "digest_failed" });
+          return SOURCE_NOT_SENT;
+        }
+        const prepared = prepareRebaseSource({
+          studyId,
+          paperId: candidate.paperId,
+          expectedVersion: knownVersion,
+          expectedAbstractSha256: sha.sha256,
+          requestId: newRequestId(),
+        });
+        if (!prepared.ok) {
+          sourceLockRef.current = false;
+          setSourceUpdate({ status: "not_sent", paperId: candidate.paperId, reason: "invalid_request" });
+          return SOURCE_NOT_SENT;
+        }
+        sourceRequestRef.current = prepared.request;
+        return await sendSourceUpdate(prepared.request);
+      } finally {
+        busyRef.current = false;
+      }
+    },
+    [base, digest, knownVersion, newRequestId, reviewWritable, sendSourceUpdate, sourceUpdateHold, studyId],
+  );
+
+  /** Resend the rebase whose outcome is in doubt: the SAME prepared request, never a new request id or another digest. */
+  const retrySourceUpdate = useCallback(async (): Promise<SourceUpdateOutcome> => {
+    const request = sourceRequestRef.current;
+    if (busyRef.current || !request || sourceUpdate.status !== "uncertain" || !reviewWritable) return SOURCE_NOT_SENT;
+    busyRef.current = true;
+    try {
+      return await sendSourceUpdate(request);
+    } finally {
+      busyRef.current = false;
+    }
+  }, [reviewWritable, sendSourceUpdate, sourceUpdate.status]);
+
+  /**
+   * Dismiss what "Use current abstract" last said. A rebase in flight or in
+   * doubt is not dismissed (try it again, or reload), and neither is a refusal
+   * that waits for a reload.
+   */
+  const clearSourceUpdate = useCallback(
+    () =>
+      setSourceUpdate((current) =>
+        current.status === "done" || current.status === "not_sent" || current.status === "source_changed" ? { status: "idle" } : current,
+      ),
+    [],
+  );
+
   return {
     draft,
     baseValues,
@@ -586,6 +876,23 @@ export function useStudyRecordEditor({
     review,
     retryReview,
     clearReviewError,
+    /** G3: each open Flag note by value, and the values whose notes are open. */
+    flagNotes,
+    openFlagIds,
+    openFlag,
+    editFlagNote,
+    closeFlag,
+    /** "Use current abstract" (EVIDENCE-RECORDS-001C2C-B). */
+    sourceUpdate,
+    /** Whether the user may be offered it at all (the owner pilot, mirrored, and a record still writable). */
+    sourceUpdateWritable: reviewWritable,
+    /** Why it waits now; null when it may start. */
+    sourceUpdateHold,
+    /** Whether a rebase is in flight or in doubt: every other write waits. */
+    sourceUpdatePending,
+    updateSource,
+    retrySourceUpdate,
+    clearSourceUpdate,
   };
 }
 

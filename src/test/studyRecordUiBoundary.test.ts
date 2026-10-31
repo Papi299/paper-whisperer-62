@@ -32,8 +32,12 @@ import { describe, expect, it } from "vitest";
  *   * a review write outside the editor hook: `reviewField` and
  *     `prepareReviewField` are used by `useStudyRecordEditor` alone
  *     (EVIDENCE-RECORDS-001C2A), and no UI module names the review RPC;
- *   * anything of PR-C2C's: the source rebase (`rebaseSource`,
- *     `prepareRebaseSource`) or its RPC name.
+ *   * a source rebase outside the editor hook: `rebaseSource` and
+ *     `prepareRebaseSource` are used by `useStudyRecordEditor` alone
+ *     (EVIDENCE-RECORDS-001C2C-B), and no UI module — the hook included —
+ *     names the rebase RPC (`evidence_rebase_source`) or its op
+ *     (`rebase_source`): the typed adapter outside this tree is their only
+ *     place;
  *   * a read of `evidence_events` (History, EVIDENCE-RECORDS-001C2B) anywhere
  *     but `src/lib/studyRecord/historyRead.ts`, or one there without its
  *     `.eq("user_id", …)` and `.eq("study_id", …)`, or whose projection is
@@ -63,7 +67,9 @@ import { describe, expect, it } from "vitest";
  * `useStudyRecords`, the only other module that may import the Supabase client.
  * C2C-A adds reads only, too: one paper's abstract and one saved copy's text,
  * each in `read.ts` with its reviewed filters, each called by one hook in
- * `useStudyRecords`; the rebase stays forbidden everywhere.
+ * `useStudyRecords`. C2C-B adds one write, the rebase — prepared and sent once
+ * each, by the editor hook alone — and one digest: Web Crypto's SHA-256, in
+ * `src/lib/studyRecord/sourceUpdate.ts` alone.
  *
  * A review-time tripwire like `evidenceDomainBoundary.test.ts`, not the
  * enforcement: RLS, the SELECT-only grants and the RPCs' own checks refuse a
@@ -88,6 +94,8 @@ const READ_MODULE_FILE = "src/lib/studyRecord/read.ts";
 const PAPER_READ_FILES = [READ_MODULE_FILE, "src/lib/studyRecord/paperLinks.ts"];
 /** C2C-A: the create flow, which alone may use the shared (not per-user) abstract cache. */
 const START_FILE = "src/components/papers/study-record/StudyRecordStart.tsx";
+/** C2C-B: the one module that computes the abstract's SHA-256 (Web Crypto). */
+const SOURCE_UPDATE_FILE = "src/lib/studyRecord/sourceUpdate.ts";
 
 const ALLOWED_IMPORTS = new Set([
   "react",
@@ -142,6 +150,7 @@ const ALLOWED_IMPORTS = new Set([
   "@/lib/studyRecord/reviewModel",
   "@/lib/studyRecord/savePlan",
   "@/lib/studyRecord/sourceDiff",
+  "@/lib/studyRecord/sourceUpdate",
   "@/lib/studyRecord/validateDraft",
 ]);
 /** Only for types, anywhere. */
@@ -234,9 +243,9 @@ const SERVER_KEYS = new Set([
   "captured_at",
   "char_count",
 ]);
-/** PR-C2C: the source rebase. */
-const DEFERRED_NAMES = new Set(["rebaseSource", "prepareRebaseSource"]);
-const DEFERRED_STRINGS = new Set(["evidence_rebase_source", "rebase_source"]);
+/** C2C-B's rebase write: the editor hook's alone. Its RPC and op names are the adapter's alone (never a UI string, the hook's included). */
+const REBASE_WRITE_NAMES = new Set(["rebaseSource", "prepareRebaseSource"]);
+const REBASE_RPC_STRINGS = new Set(["evidence_rebase_source", "rebase_source"]);
 /** C2A's review write: the editor hook's alone. Its RPC name is the adapter's alone (never a UI string). */
 const REVIEW_WRITE_NAMES = new Set(["reviewField", "prepareReviewField"]);
 const REVIEW_RPC_STRINGS = new Set(["evidence_review_fields", "review_fields"]);
@@ -437,28 +446,29 @@ export function scanStudyRecordSource(file: string, source: string): Violation[]
       }
     }
 
-    const reviewWriter = file === EDITOR_FILE;
+    // The editor hook is the one writer of reviews (C2A) and of the rebase (C2C-B).
+    const editorHook = file === EDITOR_FILE;
     const access = memberOf(node);
     if (access) {
       if (FORBIDDEN_MEMBERS.has(access.member)) report(node, `member .${access.member}`);
-      if (DEFERRED_NAMES.has(access.member)) report(node, `PR-C2C .${access.member}`);
-      if (REVIEW_WRITE_NAMES.has(access.member) && !reviewWriter) report(node, `review write .${access.member} outside the editor hook`);
+      if (REBASE_WRITE_NAMES.has(access.member) && !editorHook) report(node, `rebase write .${access.member} outside the editor hook`);
+      if (REVIEW_WRITE_NAMES.has(access.member) && !editorHook) report(node, `review write .${access.member} outside the editor hook`);
       if (ts.isIdentifier(access.object) && GLOBAL_OBJECTS.has(access.object.text) && FORBIDDEN_GLOBAL_MEMBERS.has(access.member)) {
         report(node, `${access.object.text}.${access.member}`);
       }
     }
     if (ts.isBindingElement(node)) {
       const name = node.propertyName ?? node.name;
-      if (ts.isIdentifier(name) && (FORBIDDEN_MEMBERS.has(name.text) || DEFERRED_NAMES.has(name.text) || (REVIEW_WRITE_NAMES.has(name.text) && !reviewWriter))) {
+      if (ts.isIdentifier(name) && (FORBIDDEN_MEMBERS.has(name.text) || ((REBASE_WRITE_NAMES.has(name.text) || REVIEW_WRITE_NAMES.has(name.text)) && !editorHook))) {
         report(node, `destructured ${name.text}`);
       }
     }
     if (ts.isIdentifier(node) && isValueReference(node)) {
       if (FORBIDDEN_GLOBALS.has(node.text)) report(node, `global ${node.text}`);
-      if (DEFERRED_NAMES.has(node.text)) report(node, `PR-C2C ${node.text}`);
-      if (REVIEW_WRITE_NAMES.has(node.text) && !reviewWriter) report(node, `review write ${node.text} outside the editor hook`);
+      if (REBASE_WRITE_NAMES.has(node.text) && !editorHook) report(node, `rebase write ${node.text} outside the editor hook`);
+      if (REVIEW_WRITE_NAMES.has(node.text) && !editorHook) report(node, `review write ${node.text} outside the editor hook`);
     }
-    if (ts.isStringLiteralLike(node) && DEFERRED_STRINGS.has(node.text)) report(node, `PR-C2C "${node.text}"`);
+    if (ts.isStringLiteralLike(node) && REBASE_RPC_STRINGS.has(node.text)) report(node, `rebase RPC name "${node.text}"`);
     if (ts.isStringLiteralLike(node) && REVIEW_RPC_STRINGS.has(node.text)) report(node, `review RPC name "${node.text}"`);
 
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && ts.isObjectLiteralExpression(node.parent)) {
@@ -509,6 +519,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/SavedCopyText.tsx",
       "src/components/papers/study-record/SourceCompare.tsx",
       "src/components/papers/study-record/SourcePane.tsx",
+      "src/components/papers/study-record/SourceUpdate.tsx",
       "src/components/papers/study-record/StudyRecordDialog.tsx",
       "src/components/papers/study-record/StudyRecordEditor.tsx",
       "src/components/papers/study-record/StudyRecordEntry.tsx",
@@ -520,6 +531,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/components/papers/study-record/sourceCompareCopy.ts",
       "src/components/papers/study-record/sourceCompareModel.ts",
       "src/components/papers/study-record/sourcePaneModel.ts",
+      "src/components/papers/study-record/sourceUpdateCopy.ts",
       "src/components/papers/study-record/studyRecordCopy.ts",
       "src/components/papers/study-record/useReviewFlow.ts",
       "src/hooks/useStudyRecordCreations.ts",
@@ -541,6 +553,7 @@ describe("Study Record UI boundary — the real modules", () => {
       "src/lib/studyRecord/reviewModel.ts",
       "src/lib/studyRecord/savePlan.ts",
       "src/lib/studyRecord/sourceDiff.ts",
+      "src/lib/studyRecord/sourceUpdate.ts",
       "src/lib/studyRecord/validateDraft.ts",
     ]);
   });
@@ -579,14 +592,61 @@ describe("Study Record UI boundary — the real modules", () => {
     expect(read(file)).toMatch(/import \{ newStudyRecordRequestId, studyRecordClient \} from "@\/lib\/studyRecord\/client";/);
   });
 
-  it("makes exactly the five C1 writes and C2A's review, through the adapter's typed methods", () => {
+  it("makes exactly the five C1 writes, C2A's review and C2C-B's rebase, through the adapter's typed methods", () => {
     const creations = callsOn(read(CREATIONS_FILE), "creations.ts", new Set(["studyRecordClient"]));
     const editor = callsOn(read(EDITOR_FILE), "editor.ts", new Set(["client"]));
     expect(creations).toEqual(["createStudyFromPaper"]);
-    expect([...new Set(editor)].sort()).toEqual(["deleteStudy", "reviewField", "saveChanges", "setLink", "updateStudy"]);
+    expect([...new Set(editor)].sort()).toEqual(["deleteStudy", "rebaseSource", "reviewField", "saveChanges", "setLink", "updateStudy"]);
     // No other module calls the adapter itself.
     for (const file of scannedFiles.filter((path) => path !== CREATIONS_FILE)) {
       expect(callsOn(read(file), file, new Set(["studyRecordClient"])), file).toEqual([]);
+    }
+  });
+
+  /** Every module that calls a function or method named `name`, once per call. */
+  const callersOf = (name: string) =>
+    scannedFiles.flatMap((file) => {
+      const sourceFile = parse(file, read(file));
+      const found: string[] = [];
+      const visit = (node: ts.Node) => {
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const called = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+          if (called === name) found.push(file);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      return found;
+    });
+
+  it("prepares and sends a rebase only in the editor hook, once each (C2C-B)", () => {
+    // One preparation, one send: a confirmation and its "Try again" both go through the one `sendSourceUpdate`.
+    expect(callersOf("prepareRebaseSource")).toEqual([EDITOR_FILE]);
+    expect(callersOf("rebaseSource")).toEqual([EDITOR_FILE]);
+    // Components reach the rebase only through the hook's `updateSource`, `retrySourceUpdate` and `clearSourceUpdate`.
+    for (const file of scannedFiles.filter((path) => path !== EDITOR_FILE)) {
+      expect(read(file).includes("prepareRebaseSource"), file).toBe(false);
+      expect(callsOn(read(file), file, new Set(["client", "studyRecordClient"])).filter((name) => name === "rebaseSource"), file).toEqual([]);
+    }
+    // Its RPC and op names are never a string in any module, the hook's included: the scan above reports one as a violation.
+  });
+
+  it("computes the abstract's SHA-256 in one module, with Web Crypto (C2C-B)", () => {
+    const digests: string[] = [];
+    for (const file of scannedFiles) {
+      const sourceFile = parse(file, read(file));
+      const visit = (node: ts.Node) => {
+        const access = memberOf(node);
+        if (access && (access.member === "subtle" || access.member === "digest")) digests.push(file);
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+    }
+    expect([...new Set(digests)]).toEqual([SOURCE_UPDATE_FILE]);
+    // No module hashes any other way.
+    for (const file of scannedFiles) {
+      expect(read(file), file).not.toMatch(/createHash|crypto-js|js-sha256|hash-wasm/);
     }
   });
 
@@ -747,7 +807,7 @@ describe("Study Record UI boundary — the real modules", () => {
         ts.forEachChild(node, visit);
       };
       visit(sourceFile);
-      for (const forbidden of [...DEFERRED_STRINGS, ...REVIEW_RPC_STRINGS]) expect(strings, `${file}: "${forbidden}"`).not.toContain(forbidden);
+      for (const forbidden of [...REBASE_RPC_STRINGS, ...REVIEW_RPC_STRINGS]) expect(strings, `${file}: "${forbidden}"`).not.toContain(forbidden);
     }
   });
 });
@@ -888,13 +948,17 @@ describe("Study Record UI boundary — negative controls", () => {
   it.each([
     "src/components/papers/study-record/SourcePane.tsx",
     "src/components/papers/study-record/SourceCompare.tsx",
+    "src/components/papers/study-record/SourceUpdate.tsx",
+    "src/components/papers/study-record/sourceUpdateCopy.ts",
+    "src/components/papers/study-record/StudyRecordEditor.tsx",
+    "src/components/papers/study-record/editorContext.ts",
     "src/components/papers/study-record/EarlierCopy.tsx",
     "src/components/papers/study-record/sourceCompareModel.ts",
     "src/components/papers/study-record/sourceCompareCopy.ts",
     "src/lib/studyRecord/sourceDiff.ts",
+    SOURCE_UPDATE_FILE,
     READS_FILE,
-    EDITOR_FILE,
-  ])("keeps the rebase out of %s: comparing never writes (C2C-A)", (file) => {
+  ])("keeps the rebase out of %s: only the editor hook sends it (C2C-A, C2C-B)", (file) => {
     for (const source of [
       `client.rebaseSource(request);`,
       `studyRecordClient.rebaseSource(request);`,
@@ -978,8 +1042,21 @@ describe("Study Record UI boundary — negative controls", () => {
     const advisory = `const check = checkConfirm(value, value.valueVersion, links); const done = value.review.status === "user_reviewed";`;
     expect(scanStudyRecordSource(COMPONENT, advisory)).toEqual([]);
     expect(scanStudyRecordSource(LIB, advisory)).toEqual([]);
-    // The rebase stays C2C's everywhere, the editor hook included.
-    expect(scanStudyRecordSource(EDITOR_FILE, `client.rebaseSource(request);`).length).toBeGreaterThan(0);
+    // Its RPC name stays the adapter's, the editor hook included.
     expect(scanStudyRecordSource(EDITOR_FILE, `const fn = "evidence_review_fields";`).length).toBeGreaterThan(0);
+  });
+
+  it("lets the editor hook — and only it — prepare and send a rebase; never by its RPC or op name, the hook included (C2C-B)", () => {
+    const send = `const prepared = prepareRebaseSource(input); await client.rebaseSource(prepared.request);`;
+    expect(scanStudyRecordSource(EDITOR_FILE, send)).toEqual([]);
+    // Every other module: the preparation and the send are each refused — components, the copy and model modules, the read hooks and the library.
+    for (const file of [COMPONENT, LIB, SOURCE_UPDATE_FILE, READS_FILE, "src/components/papers/study-record/SourceUpdate.tsx", "src/components/papers/study-record/SourcePane.tsx"]) {
+      expect(scanStudyRecordSource(file, send).length, file).toBe(2);
+      expect(scanStudyRecordSource(file, `const { rebaseSource } = client; rebaseSource(request);`).length, file).toBeGreaterThan(0);
+    }
+    // The hook still never names the RPC or its op, nor calls an RPC directly.
+    for (const source of [`const fn = "evidence_rebase_source";`, `const op = "rebase_source";`, `client.rpc("evidence_rebase_source", args);`, `supabase.rpc("evidence_rebase_source", args);`]) {
+      expect(scanStudyRecordSource(EDITOR_FILE, source).length, source).toBeGreaterThan(0);
+    }
   });
 });

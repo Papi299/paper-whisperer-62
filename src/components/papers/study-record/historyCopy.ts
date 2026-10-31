@@ -80,7 +80,8 @@ export const HISTORY_OPERATION_TITLES: Readonly<Record<RequestOp, string>> = Obj
   save_changes: "Changes saved",
   review_fields: "Review recorded",
   set_link: "Linked paper changed",
-  rebase_source: "Saved abstract copy updated",
+  // A first capture replaces nothing, and the header can't tell it apart: the title holds for both.
+  rebase_source: "Copy of the library abstract saved",
 });
 
 /**
@@ -94,7 +95,7 @@ export const HISTORY_UNREADABLE_TITLES: Readonly<Record<Exclude<EventType, "requ
   link_status_changed: "A paper link was changed",
   link_removed: "A paper link was removed",
   source_captured: "A copy of an abstract was saved",
-  source_rebased: "Quotes were rechecked against a new copy of an abstract",
+  source_rebased: "The record was updated for a new copy of an abstract",
   anchor_rematched: "A quote was moved to a new copy of an abstract",
   anchor_not_rematched: "A quote stayed on an earlier copy of an abstract",
   arm_added: "A group was added",
@@ -259,13 +260,7 @@ export function describeChangeText(change: HistoryChange): HistoryChangeText {
             details: [`Copy ${change.seq}, ${count(change.chars, "character", "characters")}. Earlier copies are kept; History doesn't show their text.`],
           };
     case "source_rebased":
-      return {
-        text: `Quotes rechecked against the new copy of the abstract of ${paperName(change.paper)}`,
-        details: [
-          `${count(change.rechecked, "quote", "quotes")} rechecked: ${change.rematched} found again, ${change.notFound} not found, ${change.ambiguous} found more than once.`,
-          ...(change.needRereview > 0 ? [`${count(change.needRereview, "field needs", "fields need")} re-review.`] : []),
-        ],
-      };
+      return describeSourceRebasedText(change);
     case "anchor_rematched":
       return { text: `${historyFieldName(change.field)}: a quote was found again in copy ${change.seq.to}`, details: [`It pointed to copy ${change.seq.from} before.`] };
     case "anchor_not_rematched":
@@ -349,12 +344,37 @@ function describeValueSavedText(field: HistoryField, saved: Extract<HistoryChang
   return { text: `${name}: ${parts.length > 0 ? parts.join("; ") : "saved"}`, details };
 }
 
+/**
+ * A rebase's summary (EVIDENCE-RECORDS-001C2C-B, G4): a first copy rechecks no
+ * quote and replaces nothing; a later one rechecks only the quotes that were on
+ * the copy it replaced, and says so when there were none. The review count is
+ * the values it moved to Needs re-review — never those already there.
+ */
+function describeSourceRebasedText(change: Extract<HistoryChange, { kind: "source_rebased" }>): HistoryChangeText {
+  const paper = paperName(change.paper);
+  const reviews =
+    change.needRereview > 0 ? `${count(change.needRereview, "field was", "fields were")} marked as needing re-review.` : "No field's review status changed.";
+  if (change.first) return { text: `No quotes to recheck: this was the first saved copy of the abstract of ${paper}`, details: [reviews] };
+  if (change.rechecked === 0) return { text: `No quotes rechecked: none was on the previous copy of the abstract of ${paper}`, details: [reviews] };
+  return {
+    text: `Quotes rechecked against the new copy of the abstract of ${paper}`,
+    details: [
+      `${count(change.rechecked, "quote", "quotes")} rechecked: ${change.rematched} found again, ${change.notFound} not found, ${change.ambiguous} found more than once.`,
+      ...(change.notFound + change.ambiguous > 0 ? ["A quote not found exactly once stays on the copy it was on."] : []),
+      reviews,
+    ],
+  };
+}
+
 function describeReviewText(change: Extract<HistoryChange, { kind: "review" }>): HistoryChangeText {
   const name = historyFieldName(change.field);
   const details: string[] = [];
   if (change.change === "needs_rereview") {
+    // Written only by a rebase — a first copy or a later one — which leaves the review note as it was.
     details.push(`It was ${REVIEW_STATUS_LABELS[change.from]} before.`);
-    return { text: `${name}: needs re-review — the saved abstract copy changed`, details };
+    if (change.note === "unchanged") details.push("Its review note is kept.");
+    if (change.note !== "none") details.push(NOTE_TEXT_NOT_KEPT);
+    return { text: `${name}: needs re-review — a new copy of the abstract was saved`, details };
   }
   if (change.change === "confirmed") {
     if (change.from === "disputed") details.push("This replaced your flag.");

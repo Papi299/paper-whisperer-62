@@ -10,14 +10,16 @@ import { normalizeEvidenceV1WithMap } from "@/lib/evidence/normalization";
 import { parseValueKey, setValueEdit, viewValue } from "@/lib/studyRecord/draft";
 import { addQuoteToEdit, quoteChoiceFromSelection } from "@/lib/studyRecord/quotes";
 import { reviewCopyFocus, type ReviewItem } from "@/lib/studyRecord/reviewModel";
+import type { SourceUpdateState } from "@/hooks/useStudyRecordEditor";
 import { EarlierCopy, SavedCopiesList } from "./EarlierCopy";
-import { focusOpenedSourceView, useEditor, type SourceView } from "./editorContext";
+import { focusOpenedSourceView, focusWhenShown, useEditor, type SourceView } from "./editorContext";
 import { formatRecordDate, REVIEW_COPY, reviewItemLabel } from "./reviewCopy";
 import { SavedCopyText } from "./SavedCopyText";
 import { SourceCompare, SourceStatusBanner } from "./SourceCompare";
 import { SOURCE_COMPARE_COPY } from "./sourceCompareCopy";
 import { libraryStatus } from "./sourceCompareModel";
 import { quoteFieldGroups, savedQuoteRanges, storedQuoteRange, type TextRange } from "./sourcePaneModel";
+import { SourceUpdateOutcome, SourceUpdatePanel } from "./SourceUpdate";
 import { STUDY_RECORD_COPY } from "./studyRecordCopy";
 
 type Range = TextRange;
@@ -61,6 +63,12 @@ interface CopySelection extends Range {
  * opened, one at a time, with its own quotes marked. None of them writes, and
  * "Use as quote" works on the current copy alone: a selection belongs to the
  * copy and the view it was made in, and is dropped when either changes (G2).
+ *
+ * EVIDENCE-RECORDS-001C2C-B adds the one write here: in Compare, "Use current
+ * abstract" (`SourceUpdatePanel`), which the editor hook sends. Once it is
+ * saved the pane shows the new current copy — so G2 drops any selection made
+ * in the old one — and says what the server did; when the server says the
+ * library abstract changed again, the pane reads it again at once.
  */
 export function SourcePane({
   onQuoteAdded,
@@ -113,6 +121,23 @@ export function SourcePane({
     [library.isFetching, library.isError, library.error, library.data, copyText],
   );
   const checkAgain = useCallback(() => void library.refetch(), [library]);
+
+  // What "Use current abstract" answered for this link (C2C-B), handled once per answer.
+  const outcomeRef = useRef<HTMLDivElement>(null);
+  const handledUpdate = useRef<SourceUpdateState | null>(null);
+  const update = editor.sourceUpdate.state;
+  const { setSourceView } = editor;
+  useEffect(() => {
+    if (handledUpdate.current === update || update.status === "idle" || update.paperId !== link?.link.paperId) return;
+    handledUpdate.current = update;
+    // Saved: the new current copy is what the pane shows now.
+    if (update.status === "done" || update.status === "reload_failed") setSourceView({ kind: "current" });
+    // The library changed under the confirmation: read it again, so a new choice is made on what it says now.
+    if (update.status === "source_changed") void library.refetch();
+    if (update.status === "done" || update.status === "reload_failed" || update.status === "not_sent" || update.status === "source_changed" || update.status === "failed") {
+      focusWhenShown(() => outcomeRef.current);
+    }
+  }, [library, link, setSourceView, update]);
   /** Open a view the user asked for: it takes focus, and Compare reads the library afresh (saying so while it does). */
   const showView = (next: SourceView) => {
     editor.setSourceView(next);
@@ -268,8 +293,17 @@ export function SourcePane({
             </select>
           </div>
         )}
+        {/* What "Use current abstract" answered: Edit's, like the comparison it starts from. */}
+        {link && !reviewing && <SourceUpdateOutcome ref={outcomeRef} link={link} />}
         {view.kind === "compare" && link ? (
-          <SourceCompare link={link} copy={copy} status={status} onCheckAgain={checkAgain} onBack={backToCurrent} />
+          <SourceCompare
+            link={link}
+            copy={copy}
+            status={status}
+            onCheckAgain={checkAgain}
+            onBack={backToCurrent}
+            update={<SourceUpdatePanel link={link} status={status} readAt={library.dataUpdatedAt} />}
+          />
         ) : earlier && link ? (
           <EarlierCopy link={link} info={earlier} values={earlierValues} reviewing={reviewing} onBack={backToCurrent} backLabel={SOURCE_COMPARE_COPY.backToCurrent} />
         ) : (

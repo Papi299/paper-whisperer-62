@@ -1,9 +1,12 @@
 import { createContext, useContext } from "react";
+import type { SourceUpdateHold, SourceUpdateOutcome, SourceUpdateState } from "@/hooks/useStudyRecordEditor";
 import type { FieldKey } from "@/lib/evidence/fieldDictionary";
 import type { PaperId, SnapshotId } from "@/lib/evidence/ids";
 import type { RecordedValue } from "@/lib/evidence/types";
 import type { DraftValueEdit, StudyRecordDraft } from "@/lib/studyRecord/draft";
 import type { StudyRecordData, StudyRecordLink } from "@/lib/studyRecord/read";
+import type { ReviewItem } from "@/lib/studyRecord/reviewModel";
+import type { SourceUpdateCandidate } from "@/lib/studyRecord/sourceUpdate";
 import type { DraftIssue, IssueTarget } from "@/lib/studyRecord/validateDraft";
 
 /** A question to confirm before a change that removes or clears something. */
@@ -31,6 +34,28 @@ export type SourceView =
   | { readonly kind: "current" }
   | { readonly kind: "compare" }
   | { readonly kind: "copy"; readonly snapshotId: SnapshotId };
+
+/**
+ * "Use current abstract" as the Source pane reaches it (EVIDENCE-RECORDS-001C2C-B):
+ * the editor hook's rebase — its state, why it waits, and the calls that start,
+ * retry or dismiss it. The pane prepares and sends nothing itself.
+ */
+export interface SourceUpdateControls {
+  readonly state: SourceUpdateState;
+  /** Whether it may be offered at all: the owner pilot, mirrored, and a record still writable. */
+  readonly writable: boolean;
+  /** Why it waits now; null when it may start. */
+  readonly hold: SourceUpdateHold | null;
+  /** The study version the editor writes against: a candidate is taken at it. */
+  readonly knownVersion: number;
+  /** One per saved value, as Review names it: the confirmation lists the fields whose reviews change. */
+  readonly reviewItems: readonly ReviewItem[];
+  readonly start: (candidate: SourceUpdateCandidate) => Promise<SourceUpdateOutcome>;
+  readonly retry: () => Promise<SourceUpdateOutcome>;
+  readonly dismiss: () => void;
+  /** Reload the record — asking first when the draft has unsaved changes. */
+  readonly reload: () => void;
+}
 
 /**
  * A request to open what holds a target — its collapsed section, and "More
@@ -67,6 +92,8 @@ export interface EditorContextValue {
   readonly setSourceView: (view: SourceView) => void;
   /** Show one saved copy of a linked paper's abstract — on a phone, in the Source tab. Read-only, and reads nothing but that copy. */
   readonly showSavedCopy: (paperId: PaperId, snapshotId: SnapshotId) => void;
+  /** "Use current abstract" (C2C-B). */
+  readonly sourceUpdate: SourceUpdateControls;
   /** The field that last had focus: the default target of "Use as quote". */
   readonly lastFocusedKey: string | null;
   readonly setLastFocusedKey: (key: string) => void;
@@ -101,13 +128,23 @@ export function useEditor(): EditorContextValue {
  * focus where the user put it.
  */
 export function focusOpenedSourceView(root: () => HTMLElement | null | undefined, framesLeft = 6) {
+  focusWhenShown(() => root()?.querySelector<HTMLElement>("[data-source-view-heading]"), framesLeft);
+}
+
+/**
+ * Focus an element once it is on screen — rendered, and not inside a hidden
+ * part or an inactive tab — waiting up to a few frames, never longer. Used for
+ * what "Use current abstract" answered (C2C-B), which can land after a view or
+ * tab change.
+ */
+export function focusWhenShown(element: () => HTMLElement | null | undefined, framesLeft = 6) {
   requestAnimationFrame(() => {
-    const heading = root()?.querySelector<HTMLElement>("[data-source-view-heading]");
-    if (!heading || heading.closest("[hidden], [data-state='inactive']")) {
-      if (framesLeft > 0) focusOpenedSourceView(root, framesLeft - 1);
+    const target = element();
+    if (!target || target.closest("[hidden], [data-state='inactive']")) {
+      if (framesLeft > 0) focusWhenShown(element, framesLeft - 1);
       return;
     }
-    heading.focus();
+    target.focus();
   });
 }
 

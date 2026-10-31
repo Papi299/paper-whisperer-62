@@ -35,7 +35,7 @@ describe("titles", () => {
       save_changes: "Changes saved",
       review_fields: "Review recorded",
       set_link: "Linked paper changed",
-      rebase_source: "Saved abstract copy updated",
+      rebase_source: "Copy of the library abstract saved",
     });
   });
 
@@ -98,13 +98,13 @@ describe("each recorded change, in words", () => {
     ],
     ["a quote not found again", 11, 2, "Condition or health status: a quote wasn't found in the new copy", ["It stays on copy 1."]],
     ["a quote found again", 11, 3, "Number randomized: a quote was found again in copy 2", ["It pointed to copy 1 before."]],
-    ["a review sent back by the new copy", 11, 4, "Number randomized: needs re-review — the saved abstract copy changed", ["It was Reviewed by you before."]],
+    ["a review sent back by the new copy", 11, 4, "Number randomized: needs re-review — a new copy of the abstract was saved", ["It was Reviewed by you before."]],
     [
       "the rebase's summary",
       11,
       5,
       `Quotes rechecked against the new copy of the abstract of the paper now titled “${PAPER_TITLE}”`,
-      ["2 quotes rechecked: 1 found again, 1 not found, 0 found more than once.", "1 field needs re-review."],
+      ["2 quotes rechecked: 1 found again, 1 not found, 0 found more than once.", "A quote not found exactly once stays on the copy it was on.", "1 field was marked as needing re-review."],
     ],
     ["an outcome removed", 12, 1, "Removed outcome “Body weight (kg)”", []],
     ["a group removed with its values", 12, 2, "Removed intervention group “Metformin”", ["Its 1 recorded value and their sources went with it."]],
@@ -148,6 +148,44 @@ describe("each recorded change, in words", () => {
     ]);
     expect(describeChangeText({ kind: "review", change: "flagged", field, from: "disputed", note: "changed" }).details).toEqual(["The flag's note changed.", "History doesn't keep the text of notes."]);
     expect(describeChangeText({ kind: "review", change: "flagged", field, from: "user_reviewed", note: "added" }).details).toEqual(["This replaced your review.", "History doesn't keep the text of notes."]);
+  });
+
+  it("describes a rebase as what it was (C2C-B, G4): a first copy replaced nothing and rechecked nothing; a later one rechecked only what was there", () => {
+    const paper = { current: { title: PAPER_TITLE } };
+    const summary = (change: Partial<Extract<HistoryChange, { kind: "source_rebased" }>>) =>
+      describeChangeText({ kind: "source_rebased", paper, first: false, rechecked: 0, rematched: 0, notFound: 0, ambiguous: 0, needRereview: 0, ...change });
+    // A first capture: never a replacement, never a recheck.
+    const first = summary({ first: true, needRereview: 2 });
+    expect(first).toEqual({
+      text: `No quotes to recheck: this was the first saved copy of the abstract of the paper now titled “${PAPER_TITLE}”`,
+      details: ["2 fields were marked as needing re-review."],
+    });
+    expect([first.text, ...first.details].join(" ")).not.toMatch(/replac|updated|new copy|rechecked:|found again/i);
+    expect(summary({ first: true }).details).toEqual(["No field's review status changed."]);
+    // A later copy with nothing on the copy it replaced: zero rechecked is not a recheck.
+    const none = summary({ needRereview: 1 });
+    expect(none).toEqual({
+      text: `No quotes rechecked: none was on the previous copy of the abstract of the paper now titled “${PAPER_TITLE}”`,
+      details: ["1 field was marked as needing re-review."],
+    });
+    expect(none.details.join(" ")).not.toMatch(/found again|not found|more than once/);
+    // Every quote found again, and no review moved.
+    expect(summary({ rechecked: 3, rematched: 3 }).details).toEqual(["3 quotes rechecked: 3 found again, 0 not found, 0 found more than once.", "No field's review status changed."]);
+    // Not found and found more than once are told apart, and both stay where they were.
+    expect(summary({ rechecked: 2, notFound: 1, ambiguous: 1, needRereview: 1 }).details).toEqual([
+      "2 quotes rechecked: 0 found again, 1 not found, 1 found more than once.",
+      "A quote not found exactly once stays on the copy it was on.",
+      "1 field was marked as needing re-review.",
+    ]);
+  });
+
+  it("a review sent back by a new copy keeps its note, and says so without its text (C2C-B, G4)", () => {
+    const field = { fieldKey: "condition" as const, target: { scope: "study" as const } };
+    expect(describeChangeText({ kind: "review", change: "needs_rereview", field, from: "disputed", note: "unchanged" })).toEqual({
+      text: "Condition or health status: needs re-review — a new copy of the abstract was saved",
+      details: ["It was Flagged before.", "Its review note is kept.", "History doesn't keep the text of notes."],
+    });
+    expect(describeChangeText({ kind: "review", change: "needs_rereview", field, from: "user_reviewed", note: "none" }).details).toEqual(["It was Reviewed by you before."]);
   });
 
   it("summarizes sources by kind, and says when there were none", () => {

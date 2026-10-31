@@ -11,8 +11,8 @@
  * `evidence_locate_quote` are not callable by a client at all — and does
  * nothing on import or creation: a call happens only when the caller sends a
  * prepared request. The application sends `evidence_save_changes`
- * (EVIDENCE-RECORDS-001C1) and `evidence_review_fields` (001C2A); nothing sends
- * `evidence_rebase_source` yet.
+ * (EVIDENCE-RECORDS-001C1), `evidence_review_fields` (001C2A) and
+ * `evidence_rebase_source` (001C2C-B), each from the Study Record editor hook.
  *
  * The Supabase client is injected. This module imports no client, so it works
  * against the real one and against a test double alike.

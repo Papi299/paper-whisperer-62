@@ -89,7 +89,7 @@ describe("every event an installed RPC writes", () => {
       "source_rebased",
       11,
       5,
-      { kind: "source_rebased", paper: { current: { title: PAPER_TITLE } }, rechecked: 2, rematched: 1, notFound: 1, ambiguous: 0, needRereview: 1 },
+      { kind: "source_rebased", paper: { current: { title: PAPER_TITLE } }, first: false, rechecked: 2, rematched: 1, notFound: 1, ambiguous: 0, needRereview: 1 },
     ],
     [
       "outcome_updated (renamed: the event holds both names)",
@@ -314,8 +314,38 @@ describe("before-only and after-only events", () => {
   });
 });
 
+describe("a rebase's summary (C2C-B, G4)", () => {
+  const summary = (after: Record<string, unknown>) => describeRow(changeRow(11, 5, "source_rebased", { target: SNAPSHOT_ID, after }));
+  const base = { paper_id: PAPER_ID, snapshot_id: SNAPSHOT_ID, quotes_rechecked: 0, rematched: 0, not_found: 0, ambiguous: 0, values_needing_rereview: 0, values_changed: 0 };
+
+  it("a first copy: no earlier copy, so nothing was replaced and no quote rechecked — read from the event's own previous copy, null", () => {
+    expect(summary({ ...base, previous_snapshot_id: null, values_needing_rereview: 2, values_changed: 2 })).toEqual({
+      kind: "source_rebased",
+      paper: { current: { title: PAPER_TITLE } },
+      first: true,
+      rechecked: 0,
+      rematched: 0,
+      notFound: 0,
+      ambiguous: 0,
+      needRereview: 2,
+    });
+  });
+
+  it("a later copy keeps its counts as recorded: not found and found more than once apart, and only the reviews it moved", () => {
+    expect(summary({ ...base, previous_snapshot_id: uuid("c", 2), quotes_rechecked: 3, rematched: 1, not_found: 1, ambiguous: 1, values_needing_rereview: 0, values_changed: 2 })).toMatchObject({
+      first: false,
+      rechecked: 3,
+      rematched: 1,
+      notFound: 1,
+      ambiguous: 1,
+      needRereview: 0,
+    });
+  });
+});
+
 describe("unreadable details: the type, and nothing more", () => {
   const condition = valueDigest({ valueId: VALUE_CONDITION, fieldKey: "condition" });
+  const rebased = { paper_id: PAPER_ID, snapshot_id: SNAPSHOT_ID, previous_snapshot_id: uuid("c", 2), quotes_rechecked: 0, rematched: 0, not_found: 0, ambiguous: 0, values_needing_rereview: 0, values_changed: 0 };
   it.each<[string, EventRow, object | null]>([
     ["a value digest that isn't an object", changeRow(2, 4, "value_saved", { target: VALUE_CONDITION, fieldKey: "condition", after: "digest" }), { fieldKey: "condition", target: { scope: "study" } }],
     ["a value state outside the vocabulary", changeRow(2, 4, "value_saved", { target: VALUE_CONDITION, fieldKey: "condition", after: { ...condition, value_state: "verified" } }), {}],
@@ -346,6 +376,9 @@ describe("unreadable details: the type, and nothing more", () => {
     ["a link status that didn't change", changeRow(7, 1, "link_status_changed", { target: LINK_ID, before: { paper_id: PAPER_ID, link_status: "provisional" }, after: { paper_id: PAPER_ID, link_status: "provisional" } }), null],
     ["a link change of two papers", changeRow(7, 1, "link_status_changed", { target: LINK_ID, before: { paper_id: PAPER_ID, link_status: "provisional" }, after: { paper_id: uuid("a", 2), link_status: "user_confirmed" } }), null],
     ["a copy of another kind of source", changeRow(1, 3, "source_captured", { target: SNAPSHOT_ID, after: { paper_id: PAPER_ID, seq: 1, source_kind: "full_text", char_count: 4, previous_snapshot_id: null } }), null],
+    ["a rebase summary whose previous copy isn't an id", changeRow(11, 5, "source_rebased", { target: SNAPSHOT_ID, after: { ...rebased, previous_snapshot_id: "copy-1" } }), null],
+    ["a rebase summary without its previous copy", changeRow(11, 5, "source_rebased", { target: SNAPSHOT_ID, after: (({ previous_snapshot_id: _p, ...rest }) => rest)(rebased) }), null],
+    ["a rebase summary with a count that isn't one", changeRow(11, 5, "source_rebased", { target: SNAPSHOT_ID, after: { ...rebased, values_needing_rereview: -1 } }), null],
     ["a re-match that moved to an older copy", changeRow(11, 3, "anchor_rematched", { target: ANCHOR_N_QUOTE, fieldKey: "n_randomized", before: { value_id: VALUE_N_RANDOMIZED, seq: 2 }, after: { value_id: VALUE_N_RANDOMIZED, seq: 1 } }), { fieldKey: "n_randomized", target: { scope: "study" } }],
     ["a missed re-match with an unknown outcome", changeRow(11, 2, "anchor_not_rematched", { target: ANCHOR_N_QUOTE, fieldKey: "condition", after: { value_id: VALUE_CONDITION, kept_seq: 1, outcome: "lost" } }), { fieldKey: "condition", target: { scope: "study" } }],
     ["a group label of HTML beyond its limit", changeRow(2, 1, "arm_added", { target: ARM_INTERVENTION, after: { arm_role: "intervention", display_label: `<img src=x onerror=alert(1)>${"x".repeat(120)}`, position: 0 } }), null],

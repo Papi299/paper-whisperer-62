@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { RecordedValue } from "@/lib/evidence/types";
 import { assemble, fullRows, valueRow, VALUE_CONDITION } from "@/lib/studyRecord/__tests__/fixtures";
@@ -9,6 +10,8 @@ import { FlagForm } from "../FlagForm";
  * PR-B's `checkFlag`, at least 3 characters after trimming spaces, not blank
  * after normalization v1, at most 2,000 code points, well formed — with every
  * problem in words, linked to the field, and nothing sent until it is right.
+ * The note is the editor's since C2C-B (G3): the form shows and changes the
+ * note it is given, here held by a stand-in for the editor's store.
  */
 
 const cp = (code: number) => String.fromCodePoint(code);
@@ -22,10 +25,30 @@ function value(overrides: Parameters<typeof valueRow>[0] = {}): RecordedValue {
   return assemble(rows).values[0];
 }
 
+/** The editor's note store, reduced to one note: it starts as the editor's `openFlag` starts it. */
+function Controlled({
+  saved,
+  start,
+  autoFocus = true,
+  heldReason = null,
+  onSubmit,
+  onCancel,
+}: {
+  readonly saved: RecordedValue;
+  readonly start?: string;
+  readonly autoFocus?: boolean;
+  readonly heldReason?: string | null;
+  readonly onSubmit: (note: string) => void;
+  readonly onCancel: () => void;
+}) {
+  const [note, setNote] = useState(start ?? (saved.review.status === "disputed" ? saved.review.note ?? "" : ""));
+  return <FlagForm id="flag" value={saved} note={note} onNoteChange={setNote} autoFocus={autoFocus} working={false} heldReason={heldReason} onSubmit={onSubmit} onCancel={onCancel} />;
+}
+
 function renderForm(saved: RecordedValue = value()) {
   const onSubmit = vi.fn();
   const onCancel = vi.fn();
-  render(<FlagForm id="flag" value={saved} working={false} heldReason={null} onSubmit={onSubmit} onCancel={onCancel} />);
+  render(<Controlled saved={saved} onSubmit={onSubmit} onCancel={onCancel} />);
   const note = screen.getByLabelText("What's wrong with this value?");
   const submit = () => fireEvent.click(screen.getByRole("button", { name: /^(Flag|Update flag)$/ }));
   const type = (text: string) => fireEvent.change(note, { target: { value: text } });
@@ -120,10 +143,35 @@ describe("the Flag note", () => {
 
   it("sends nothing while the card's actions wait, and says why", () => {
     const onSubmit = vi.fn();
-    render(<FlagForm id="flag" value={value()} working={false} heldReason="Wait for the current action to finish." onSubmit={onSubmit} onCancel={vi.fn()} />);
+    render(<Controlled saved={value()} heldReason="Wait for the current action to finish." onSubmit={onSubmit} onCancel={vi.fn()} />);
     fireEvent.change(screen.getByLabelText("What's wrong with this value?"), { target: { value: "Check the table" } });
     fireEvent.click(screen.getByRole("button", { name: "Flag" }));
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText("Wait for the current action to finish.")).toBeInTheDocument();
+  });
+
+  it("shows the note it is given — an unfinished one kept by the editor — and reports each change instead of keeping its own (G3)", () => {
+    const onNoteChange = vi.fn();
+    const { rerender } = render(
+      <FlagForm id="flag" value={value()} note="Half a thou" onNoteChange={onNoteChange} autoFocus={false} working={false} heldReason={null} onSubmit={vi.fn()} onCancel={vi.fn()} />,
+    );
+    const note = screen.getByLabelText("What's wrong with this value?");
+    expect(note).toHaveValue("Half a thou");
+    fireEvent.change(note, { target: { value: "Half a thought" } });
+    expect(onNoteChange).toHaveBeenCalledWith("Half a thought");
+    // Not the form's to change: until the editor changes it, the note is as given.
+    expect(note).toHaveValue("Half a thou");
+    rerender(<FlagForm id="flag" value={value()} note="Half a thought" onNoteChange={onNoteChange} autoFocus={false} working={false} heldReason={null} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    expect(note).toHaveValue("Half a thought");
+  });
+
+  it("takes focus only when the user opened it — not when its card comes back into view with the note still open (G3)", () => {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+    render(<Controlled saved={value()} start="Kept while hidden" autoFocus={false} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByLabelText("What's wrong with this value?")).toHaveValue("Kept while hidden");
+    expect(button).toHaveFocus();
+    button.remove();
   });
 });

@@ -42,7 +42,8 @@ export function ReviewPane({ editor, flow, canWrite, onFocusItem, onReload }: Re
   const ids = useId();
   const items = editor.reviewItems;
   const [filter, setFilter] = useState<ReviewFilter>("needs_review");
-  const shown = filterReviewItems(items, filter);
+  // A card with an open Flag note stays shown whatever the filter (G3): the note is never hidden away unfinished.
+  const shown = filterReviewItems(items, filter, editor.openFlagIds);
   const summary = reviewSummary(items);
   const needing = items.filter((item) => item.needsReview).length;
   const linkSources = useMemo(() => linkSourcesOf(context.base), [context.base]);
@@ -111,11 +112,15 @@ export function ReviewPane({ editor, flow, canWrite, onFocusItem, onReload }: Re
                   links={context.links}
                   linkSources={linkSources}
                   action={editor.reviewAction}
+                  flagNote={editor.flagNotes.get(item.value.id) ?? null}
                   registerHeading={flow.registerHeading}
                   registerStatus={flow.registerStatus}
                   onFocusItem={onFocusItem}
                   onConfirm={(chosen) => void flow.confirm(chosen)}
-                  onFlag={flow.flag}
+                  onFlag={(chosen, note) => void flow.flag(chosen, note)}
+                  onFlagOpen={(chosen) => editor.openFlag(chosen.value.id)}
+                  onFlagNoteChange={(chosen, note) => editor.editFlagNote(chosen.value.id, note)}
+                  onFlagClose={(chosen) => editor.closeFlag(chosen.value.id)}
                   onEdit={(chosen) => context.focusTarget({ kind: "value", key: chosen.key })}
                   onReload={onReload}
                   onDismiss={editor.clearReviewError}

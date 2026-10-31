@@ -90,6 +90,11 @@ import {
   provisionSourceCompareAccounts,
   removeSourceCompareAccounts,
 } from "./e2e-local-source-compare-fixture.mjs";
+import {
+  assertRebaseOutcomeAndRemove,
+  provisionRebaseAccounts,
+  removeRebaseAccounts,
+} from "./e2e-local-rebase-fixture.mjs";
 import { resolveSpecSelection } from "./e2e-local-spec-selection.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -241,8 +246,9 @@ const DEFAULT_SPECS = [
   "e2e/ai-model-settings.spec.ts",
   // The Evidence Records specs — EVIDENCE-RECORDS-001C1's `e2e/study-records.spec.ts`,
   // 001C2A's `e2e/study-records-review.spec.ts`, 001C2B's
-  // `e2e/study-records-history.spec.ts` and 001C2C-A's
-  // `e2e/study-records-source-compare.spec.ts` — are deliberately NOT in this set
+  // `e2e/study-records-history.spec.ts`, 001C2C-A's
+  // `e2e/study-records-source-compare.spec.ts` and 001C2C-B's
+  // `e2e/study-records-rebase.spec.ts` — are deliberately NOT in this set
   // (CI-E2E-EVIDENCE-LANE-001). The `e2e-evidence` job in
   // .github/workflows/e2e-local.yml runs them on their own runner and stack, so
   // the Evidence Records suite can grow without spending this lane's 30-minute
@@ -530,6 +536,8 @@ async function cmdRun(specArgs) {
   let historyAccounts = null;
   // And for EVIDENCE-RECORDS-001C2C-A's source-comparison accounts.
   let sourceAccounts = null;
+  // And for EVIDENCE-RECORDS-001C2C-B's rebase accounts.
+  let rebaseAccounts = null;
   // Fixture rows are written and verified as the local database owner, never
   // through the secret key (C57): see openLocalOwnerSql.
   let ownerSql = null;
@@ -594,6 +602,14 @@ async function cmdRun(specArgs) {
       ? await provisionSourceCompareAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
       : null;
 
+    // EVIDENCE-RECORDS-001C2C-B rebase accounts: the same pilot role, on
+    // accounts of their own, provisioned only when Playwright will run
+    // `study-records-rebase.spec.ts`. Their copies, reviews and earlier rebases
+    // are made by the installed RPCs, never inserted.
+    rebaseAccounts = selection.fixtures.has("study-records-rebase")
+      ? await provisionRebaseAccounts({ apiUrl, anonKey, serviceRoleKey, ownerSql, log })
+      : null;
+
     // Explicit, in-memory backend contract for the guarded Playwright run.
     const childEnv = {
       ...process.env,
@@ -645,6 +661,14 @@ async function cmdRun(specArgs) {
             E2E_STUDY_SOURCE_OWNER_PASSWORD: sourceAccounts.owner.password,
             E2E_STUDY_SOURCE_FORMER_EMAIL: sourceAccounts.former.email,
             E2E_STUDY_SOURCE_FORMER_PASSWORD: sourceAccounts.former.password,
+          }
+        : {}),
+      ...(rebaseAccounts
+        ? {
+            E2E_STUDY_REBASE_OWNER_EMAIL: rebaseAccounts.owner.email,
+            E2E_STUDY_REBASE_OWNER_PASSWORD: rebaseAccounts.owner.password,
+            E2E_STUDY_REBASE_FORMER_EMAIL: rebaseAccounts.former.email,
+            E2E_STUDY_REBASE_FORMER_PASSWORD: rebaseAccounts.former.password,
           }
         : {}),
     };
@@ -722,12 +746,22 @@ async function cmdRun(specArgs) {
       sourceAccounts = null; // proven, removed, and the removal verified
       log("study-records-source-compare E2E verified: comparing wrote nothing; fixture accounts removed.");
     }
+
+    // What only the database can see of the rebase: each one the spec made —
+    // its version, copies (the earlier ones unchanged), quote offsets, reviews
+    // and one request's events — and every other record exactly as
+    // provisioned. Then both accounts are removed, and their removal is verified.
+    if (rebaseAccounts) {
+      await assertRebaseOutcomeAndRemove({ apiUrl, serviceRoleKey, ownerSql, accounts: rebaseAccounts, log });
+      rebaseAccounts = null; // proven, removed, and the removal verified
+      log("study-records-rebase E2E verified: each rebase written once, as the server records it; nothing else written; fixture accounts removed.");
+    }
   } catch (err) {
     primaryError = err;
     // A failed run may have left the disposable account behind. Remove it
     // best-effort so a debugging session with E2E_KEEP_LOCAL_STACK=1 does not
     // accumulate residue; the deterministic fixtures are never touched.
-    if (disposable || modelAccount || studyAccounts || reviewAccounts || historyAccounts || sourceAccounts) {
+    if (disposable || modelAccount || studyAccounts || reviewAccounts || historyAccounts || sourceAccounts || rebaseAccounts) {
       const target = await readLocalStatus().catch(() => null);
       if (target && disposable) {
         await cleanupDisposableAccount({
@@ -782,6 +816,16 @@ async function cmdRun(specArgs) {
           accounts: sourceAccounts,
           log,
         }).catch((cleanupErr) => fail(`source-compare fixture cleanup: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`));
+      }
+      if (target && rebaseAccounts && ownerSql) {
+        // Verified removal, as for the source-comparison accounts: a survivor is reported, and the first error is kept.
+        await removeRebaseAccounts({
+          apiUrl: target.apiUrl,
+          serviceRoleKey: target.serviceRoleKey,
+          ownerSql,
+          accounts: rebaseAccounts,
+          log,
+        }).catch((cleanupErr) => fail(`rebase fixture cleanup: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`));
       }
     }
   }
@@ -905,7 +949,8 @@ async function cmdVerifyGuards() {
     [["e2e/study-records-review.spec.ts"], ["study-records-review"]],
     [["e2e/study-records-history.spec.ts"], ["study-records-history"]],
     [["e2e/study-records-source-compare.spec.ts"], ["study-records-source-compare"]],
-    [["E2E/STUDY-RECORDS"], ["study-records", "study-records-history", "study-records-review", "study-records-source-compare"]],
+    [["e2e/study-records-rebase.spec.ts"], ["study-records-rebase"]],
+    [["E2E/STUDY-RECORDS"], ["study-records", "study-records-history", "study-records-rebase", "study-records-review", "study-records-source-compare"]],
     [["e2e/auth.spec.ts"], []],
   ];
   for (const [specArgs, expected] of selections) {

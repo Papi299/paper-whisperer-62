@@ -12,6 +12,11 @@ interface FlagFormProps {
   readonly id: string;
   /** The SAVED value being flagged, at the version its card shows. */
   readonly value: RecordedValue;
+  /** The note as typed. The editor keeps it (G3), so it outlives this form. */
+  readonly note: string;
+  readonly onNoteChange: (note: string) => void;
+  /** Focus the note when the form appears: when the user opened it, not when its card comes back into view. */
+  readonly autoFocus: boolean;
   /** A Flag of this value is being recorded. */
   readonly working: boolean;
   /** Why it can't be sent right now (the card's hold), or null. */
@@ -29,16 +34,21 @@ interface FlagFormProps {
  * changes. Escape cancels without sending anything (the dialog does not close:
  * the form is marked `data-escape-closes-form`). Flagging never changes the
  * value, and a failed rule never flags it by itself.
+ *
+ * The note itself is the editor's (EVIDENCE-RECORDS-001C2C-B, G3): an
+ * unfinished note survives a switch between Edit and Review and a filter that
+ * hides its card, and while any note is open the editor holds "Use current
+ * abstract".
  */
-export function FlagForm({ id, value, working, heldReason, onSubmit, onCancel }: FlagFormProps) {
+export function FlagForm({ id, value, note, onNoteChange, autoFocus, working, heldReason, onSubmit, onCancel }: FlagFormProps) {
   const ids = useId();
   const existing = value.review.status === "disputed" ? value.review.note ?? "" : "";
-  const [note, setNote] = useState(existing);
   const [attempted, setAttempted] = useState(false);
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const focusOnMount = useRef(autoFocus);
 
   useEffect(() => {
-    fieldRef.current?.focus();
+    if (focusOnMount.current) fieldRef.current?.focus();
   }, []);
 
   const check = checkFlag(value, value.valueVersion, note);
@@ -84,7 +94,7 @@ export function FlagForm({ id, value, working, heldReason, onSubmit, onCancel }:
         value={note}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy}
-        onChange={(event) => setNote(event.target.value)}
+        onChange={(event) => onNoteChange(event.target.value)}
       />
       <p id={`${ids}-help`} className="text-xs text-muted-foreground">
         {REVIEW_COPY.flagHelp}
