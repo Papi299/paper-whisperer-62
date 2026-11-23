@@ -24,7 +24,14 @@ GitHub's Dependabot reported **15 open alerts** on `main` `dee28f4d` on 2026-11-
 
 **After the Vite remediation merged (2026-11-23).** On `main` `626f794f`, Dependabot showed **11 open alerts**. Alerts 9–13 closed as fixed. The same rescan opened alert **20**, for `minimatch` [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (moderate). That advisory had been in GitHub's database since 2026-10-30 and `npm audit` already counted it. Dependabot had simply not evaluated this lockfile until the merge changed it. `npm audit` on `main` `626f794f` matched the Vite-remediation column above. The 18 CodeQL alerts were unchanged.
 
-**With the [React Router patch set](#react-router-patch-set--7186) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `3d0accdd…`) measures the same as `main` `626f794f`: **16** full (3 high / 13 moderate) and **7** production (3 high / 4 moderate), with the same packages and the same advisories. The eight advisories the patch set addresses are published only in the packages' own repositories, not in GitHub's Advisory Database, so they move neither `npm audit` nor Dependabot.
+**With the [React Router patch set](#react-router-patch-set--7186) (2026-11-23).** Its lockfile (`package-lock.json` SHA-256 `3d0accdd…`) measures the same as `main` `626f794f`: **16** full (3 high / 13 moderate) and **7** production (3 high / 4 moderate), with the same packages and the same advisories. The eight advisories the patch set addresses are published only in the packages' own repositories, not in GitHub's Advisory Database, so they move neither `npm audit` nor Dependabot. It merged the same day as `ae201aff`. On `main` `ae201aff`, `npm audit` again measured 16 full and 7 production, Dependabot showed the same 11 open alerts, and CodeQL showed 18.
+
+**With the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `d8ab7215…`) measures **10** full (1 high / 9 moderate) and **1** production (1 high, `zod`). It removes six entries from each report:
+- `brace-expansion`, `glob`, `postcss-selector-parser`, `source-map-js` and `sucrase` from both;
+- `@tailwindcss/typography` from the full report;
+- `minimatch` from the production report, because its remaining copy is dev-only.
+
+Dependabot closes an alert only after a change reaches `main`. This change should close alerts 1, 3, 5, 6, 8, 17 and 18, and leave alerts 14, 15, 16 and 20 open. That is a projection: after the merge, re-read the alert list, because the same rescan can also open alerts, as it did with alert 20.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -55,7 +62,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test. It is not complete until its pull request merges.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`. It is not complete until its pull request merges.
 
 ## Current resolved security baseline
 
@@ -64,13 +71,14 @@ These resolutions must not regress. A change that moves any of them backwards re
 | Cluster | Packages |
 |---|---|
 | 1 | `vite` 7.3.6 — **superseded by 7.3.8** ([Vite development-server RCE](#vite-development-server-rce--remediated)) · `vitest` 3.2.7 — **superseded by 4.1.11** ([Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade)) · `postcss` 8.5.26 |
-| 2 | `lodash` 4.18.1 · `ws` 8.21.3 — **superseded by 8.23.0** in the [React Router patch set](#react-router-patch-set--7186) · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
+| 2 | `lodash` 4.18.1 · `ws` 8.21.3 — **superseded by 8.23.0** in the [React Router patch set](#react-router-patch-set--7186) · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) — **superseded by 1.1.22** (nested v2 line **2.1.8**) in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) |
 | 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
 | 5 | `react-router` **7.18.2** (declared `^7.18.2`) — **superseded by 7.18.6** · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 — **superseded by 2.7.3**, both in the [React Router patch set](#react-router-patch-set--7186) |
-| Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) |
+| Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) — **superseded by 6.1.6** in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set), which also removes the nested 6.0.10 |
 | Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** |
 | Vite dev-server RCE | `vite` **7.3.8** (declared `^7.3.1`) |
-| React Router patch set (this change; on `main` only once its pull request merges) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
+| React Router patch set (merged as `ae201aff`) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
+| CSS and build-toolchain patch set (this change; on `main` only once its pull request merges) | `source-map-js` **1.2.4** · `brace-expansion` **1.1.22** (nested v2 line **2.1.8**) · `postcss-selector-parser` **6.1.6** · `sucrase` **3.35.1** · `glob` and `@tailwindcss/typography` no longer installed |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -121,7 +129,7 @@ Reassess when a Vite 7.x release bundles `postcss-selector-parser` 7.1.8 or late
 
 ## React Router patch set — 7.18.6
 
-**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-REACT-ROUTER-PATCH-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges, and Production only after the deployment the merge triggers. On 2026-11-23, `main` `626f794f` and Production `dpl_H5t62SH3` still resolved and served `react-router` 7.18.2, `set-cookie-parser` 2.7.2 and `ws` 8.21.3.
+**Status: REMEDIATED on `main`** (`PAPERLUME-SECURITY-REACT-ROUTER-PATCH-001`). PR #368 merged on 2026-11-23 as `ae201aff`. Since that day's automatic deployment, Production `dpl_HjkGBrVw` has served `react-router` 7.18.6. Before the merge, `main` `626f794f` and Production `dpl_H5t62SH3` resolved and served `react-router` 7.18.2, `set-cookie-parser` 2.7.2 and `ws` 8.21.3. The rest of this section was written while the pull request was open.
 
 Eight advisories cover those versions. Each package's own repository has published its advisories, but on 2026-11-23 none of them was in GitHub's Advisory Database. None therefore produced a Dependabot alert or an `npm audit` finding.
 
@@ -217,29 +225,155 @@ Reassess when a Vite 7.x release bundles `ws` 8.23.0 or later, or as part of a V
 
 This change leaves every other [open finding](#open-findings-2026-11-23) as it was. `npm audit` still measures 16 full and 7 production, Dependabot still shows 11 open alerts on `main`, and CodeQL still shows 18. Vite's bundled `ws` and `postcss-selector-parser` copies also remain, as described in their residual notes. Classifying the CodeQL alerts remains a separate track (**status: planning only**).
 
+## CSS and build-toolchain patch set
+
+**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-CSS-BUILD-CLUSTER-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. On 2026-11-23, `main` `ae201aff` still resolved the "before" versions below, and Production `dpl_HjkGBrVw` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build and CSS equivalence](#build-and-css-equivalence)).
+
+| Package | Before → after | Reached through | Advisories | Dependabot |
+|---|---|---|---|---|
+| `source-map-js` | 1.2.1 → **1.2.4** | `postcss` | [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q) (high, CVE-2026-93749): event-loop denial of service through indexed source-map section offsets, fixed in 1.2.2 | alert 8 |
+| `brace-expansion` | 1.1.18 → **1.1.22**; nested 2.1.4 → **2.1.8** | `eslint` → `minimatch` 3.1.5 (1.x line); `typescript-eslint` → `@typescript-eslint/typescript-estree` → `minimatch` 9.0.9 (2.x line). A second 2.1.4 copy, under `glob`, is removed | [GHSA-6j4f-fj2g-mc7p](https://github.com/advisories/GHSA-6j4f-fj2g-mc7p) (high, CVE-2026-102276) and [GHSA-qhr7-859c-m2p7](https://github.com/advisories/GHSA-qhr7-859c-m2p7) (high, CVE-2026-102278): stack exhaustion; [GHSA-q2hr-2g5m-vwhr](https://github.com/advisories/GHSA-q2hr-2g5m-vwhr) (moderate, CVE-2026-102277): quadratic expansion; upstream-only [GHSA-6jwq-xf8q-xcwh](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6jwq-xf8q-xcwh) (high): unbounded parsing and expansion work, fixed in 1.1.22 / 2.1.8 | alerts 1, 3, 5, 6 |
+| `postcss-selector-parser` | 6.1.4 → **6.1.6**; nested 6.0.10 removed | `tailwindcss` and `postcss-nested`; 6.0.10 only through `@tailwindcss/typography` | [GHSA-rj75-hqrm-r3gf](https://github.com/advisories/GHSA-rj75-hqrm-r3gf) (moderate, CVE-2026-104844): quadratic flat-selector parsing, fixed in 6.1.5; upstream-only [GHSA-67xj-gfww-g738](https://github.com/postcss/postcss-selector-parser/security/advisories/GHSA-67xj-gfww-g738) (moderate): four more quadratic paths, fixed in 6.1.6 | alert 17 |
+| `sucrase` | 3.35.0 → **3.35.1** | `tailwindcss`, which uses it to load `tailwind.config.ts` | none of its own; 3.35.1 replaces `glob` with `tinyglobby` | — |
+| `glob` | 10.5.0 → **removed** | `tailwindcss` → `sucrase` 3.35.0 | [GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4) (moderate, CVE-2026-118773): AbortSignal cancellation bypass, fixed only in 14.0.2, outside `sucrase` 3.35.0's `^10.3.10` | alert 18 |
+| `minimatch` | 9.0.9, two copies → **one copy** | the `glob` copy is removed; the `typescript-estree` copy remains | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (moderate, CVE-2026-118764), fixed in 11.0.1; upstream-only [GHSA-c859-jr93-m5j4](https://github.com/isaacs/minimatch/security/advisories/GHSA-c859-jr93-m5j4) (moderate), fixed in 11.0.8 | alert 20 **stays open** |
+| `@tailwindcss/typography` | 0.5.16 → **removed** | root `devDependencies` | none of its own; it exact-pins `postcss-selector-parser` 6.0.10 | — |
+
+### Build-time exposure only
+
+- Every package above runs in Node: during `vite build`, the development server, ESLint or TypeScript-ESLint. None is in the web bundle or the extension.
+- `npm audit --omit=dev` counts several of them as production dependencies, and Dependabot gives alerts 1, 3, 5, 8, 17, 18 and 20 the "runtime" scope. That is the packaging artifact described under [NanoID](#introducing-path): `tailwindcss-animate` sits in root `dependencies` and declares `tailwindcss` as a peer.
+- Their inputs come from the repository itself: its CSS, the source maps PostCSS handles, and the glob patterns in its ESLint and TypeScript-ESLint configuration. The production build writes no source map. Both `postcss-selector-parser` advisories state that build-time use on trusted CSS is not affected.
+- As with [NanoID](#applicability), low exploitability is not the deciding factor. Compatible patched releases exist, so the [remediation policy](#remediation-policy) applies them.
+
+### Version choices
+
+- **`source-map-js` 1.2.4.**
+  - 1.2.2 is the patched floor. 1.2.4 is the newest release (`latest`), and it is what `npm update` picks inside PostCSS's `^1.2.1`. The policy prefers the newest in-range version and forbids hand-editing lockfile fields.
+  - 1.2.3 removes `new Function`. 1.2.4 fixes index-map lookups, including a stack overflow on maps with about 200,000 or more sources.
+  - Both releases came from the package's sole maintainer, on 2026-11-18 and 2026-11-19. They declare no dependencies and no install scripts, and carry no provenance attestation.
+  - Dependabot's PR #351 proposes the same version.
+- **`brace-expansion` 1.1.22 and 2.1.8.** They carry the `1.x` and `2.x` maintenance dist-tags and were published on 2026-11-11. On those lines they are the only releases outside GHSA-6jwq. Their dependencies are unchanged.
+- **`postcss-selector-parser` 6.1.6** (`legacy-v6`, 2026-11-08).
+  - Since 6.1.5, the 6.x line receives security fixes only. It is kept for Tailwind 3, whose `^6.1.2` excludes 7.x.
+  - 6.1.6 replaces its `cssesc` dependency with an internal linear copy, whose output upstream states is unchanged. `cssesc` leaves the tree.
+- **`sucrase` 3.35.1** (`latest`, 2025-11-19). It depends on `tinyglobby` `^0.2.11` instead of `glob`. The tree already had `tinyglobby` 0.2.15 for Vite and Vitest, so nothing new is installed.
+
+### The nested 6.0.10 copy, measured
+
+The [remediation 002](#advisory-remediation-002--remediated) note that 6.0.10 lay outside the affected range was about GHSA-w9m9-85wc-3x92 (`>=6.1.0 <6.1.3`). It still holds for that advisory. GHSA-rj75's `<6.1.5` and GHSA-67xj's `>=4.0.0-rc.0 <6.1.6` both include 6.0.10, and timings confirm it is affected in practice.
+
+Each input is one of the advisories' published shapes, scaled down. Each was parsed locally, under Node 26, by the package's registry tarball:
+
+| Input | 6.0.10 | 6.1.4 | 6.1.6 |
+|---|---|---|---|
+| 40,000 flat classes, `.a.a…` (GHSA-rj75) | 384 ms | 359 ms | 22 ms |
+| 20,000 digits, then 20,000 classes (GHSA-67xj) | 1,265 ms | 1,273 ms | 11 ms |
+| 40,000 comment-only spaces (GHSA-67xj) | 1,520 ms | 1,773 ms | 16 ms |
+| 4,000 parenthesis groups (GHSA-67xj) | 1,347 ms | 1,347 ms | 3 ms |
+| 8,000 backslashes before a namespace bar (GHSA-67xj) | 1,026 ms | 926 ms | 1 ms |
+
+On 6.0.10 and 6.1.4, doubling an input roughly quadrupled its time. No input was sent to Production or to a Preview.
+
+### Removing `@tailwindcss/typography`
+
+- It has been in `devDependencies` since the 2025-01-01 template commit `b331aa1`. No revision of `tailwind.config.ts` registers it, nothing imports it, and no component uses a `prose` class.
+- Every release through 0.5.20, the newest, exact-pins `postcss-selector-parser` 6.0.10. Upgrading it cannot clear the advisories; removing it does.
+- `lodash.castarray` and `lodash.isplainobject` leave with it. `lodash.merge` stays, for ESLint.
+- **Negative control.** Registering the plugin in a copy of `main` grows the stylesheet from 79,637 B to 91,978 B and adds 81 `.prose` selectors. No component asks for them: Tailwind's content scan matches the English word "prose" in 13 comment and test lines under `src/`. The real stylesheet has no `.prose` rule, before or after this change.
+
+### Lockfile delta
+
+From `main` `ae201aff`:
+
+```bash
+npm uninstall @tailwindcss/typography --package-lock-only
+npm update source-map-js brace-expansion postcss-selector-parser sucrase --package-lock-only
+```
+
+- `package.json` loses one line: the `@tailwindcss/typography` entry. No `overrides` entry was added, and `npm audit fix` was not run.
+- `package-lock.json` goes from 561 to 525 entries. Nothing is added, and no version goes down.
+  - **36 entries removed:**
+    - `glob` 10.5.0 and its 30-entry subtree, including its `minimatch` 9.0.9 and `brace-expansion` 2.1.4 copies;
+    - `@tailwindcss/typography`, with its nested `postcss-selector-parser` 6.0.10, `lodash.castarray` and `lodash.isplainobject`;
+    - `cssesc`.
+  - **5 version updates:** the four packages above, with `brace-expansion` on two lines.
+  - **13 flag-only changes, with versions unchanged.**
+    - Ten packages that only the removed `glob` subtree had made reachable from production become `dev`.
+    - `tinyglobby`, `fdir` and `picomatch` 4.0.5 lose `dev`, because `sucrase` now reaches them.
+  - The root entry's `devDependencies` change, matching `package.json`.
+- The result is reproducible.
+  - Running the update as one combined command gives a byte-identical lockfile.
+  - A later `npm install --package-lock-only` changes nothing.
+  - `npm ci` leaves the lockfile unchanged, and `npm ls --all` exits 0.
+- Every `resolved` URL is on `registry.npmjs.org`, with sha512 integrity. `npm audit signatures` verified the registry signatures of all 466 installed packages, plus 67 provenance attestations.
+- `tailwind.config.ts`, `postcss.config.js` and every other configuration file are unchanged.
+
+### Build and CSS equivalence
+
+Both sides were built from clean installs with CI's placeholder environment: `main` `ae201aff`, and this change's lockfile commit. They produced **byte-identical** output.
+- **`dist/`:** the same 9 files, 2,077,049 B in total.
+  - The stylesheet is `index-DF6xUHEF.css`: 79,637 B, SHA-256 `27bf46dd…`, with 1,127 rule blocks and 1,124 distinct class tokens.
+  - It is byte-identical to the file Production serves.
+- **`dist-extension/`:** the same 8 files, 22,279 B in total, including `popup.css`.
+- **Builds and checks:** the build logs differ only in timings. Vite and its plugins, Tailwind, PostCSS, autoprefixer, browserslist and caniuse-lite resolve to the same versions. The lint, typecheck and Vitest results match `main`'s.
+
+### Dependabot overlap
+
+None of these pull requests was modified. At their current heads, all four had successful `validate`, `db-tests`, `e2e-local`, `e2e-evidence` and `extension` checks, and a neutral CodeQL result.
+
+| PR | Head · base | Proposes | Relation to this change |
+|---|---|---|---|
+| #351 | `e200dc6f` · `626f794f`, behind `main` | `source-map-js` 1.2.4 | The same entry. Compared with current `main`, its lockfile also shows the three React Router entries going backwards, but only because its base predates `ae201aff` |
+| #364 | `8b87184b` · `ae201aff` | `sucrase` 3.35.1, removing `glob` | All 45 entries it moves are identical here: the 31 removals, the 13 flag changes and `sucrase` |
+| #366 | `710d7f9d` · `ae201aff` | `typescript-eslint` `^8.73.0` in `package.json`, `minimatch` 11.0.9, and the same `sucrase` change | Only the `sucrase` part is reproduced. The `typescript-eslint` family upgrade is out of scope |
+| #367 | `e4c2f3d4` · `ae201aff` | `brace-expansion` 1.1.22 and 2.1.8, three entries | Two entries are identical here. The third, under `glob`, is removed |
+
+After this change reaches `main`, expect Dependabot to rebase or close these pull requests on its own.
+
+### What this leaves open
+
+- **`minimatch` 9.0.9**, under `@typescript-eslint/typescript-estree` 8.38.0, which declares `^9.0.4`.
+  - It stays inside GHSA-g3hv-75wg-m249 (alert 20) and the upstream-only GHSA-c859-jr93-m5j4.
+  - `typescript-estree` 8.72.2 still declares `^10.2.2`. 8.73.0 is the first release to declare `^11.0.1`.
+  - The `minimatch` 11.0.9 that range resolves today is also past two 11.x-only upstream advisories, GHSA-cf2h-pxjq-68xw and GHSA-hqmv-qgp3-jx75.
+  - Fixing it needs the `typescript-eslint` family upgrade that Dependabot's PR #366 proposes. That belongs to the test-and-lint step in the [planned order](#open-findings-2026-11-23).
+- **`@vitest/mocker`** (alerts 14 and 15) and **`zod`** (alert 16) are unchanged.
+- **`npm audit` with this change:**
+  - full: 10 (1 high / 9 moderate): `zod`; `minimatch` and the six `typescript-eslint` entries that reach it; `@vitest/mocker` and `vitest`;
+  - production: 1, `zod`.
+- **Upstream sweep with this change:** 5 matches, down from 23 on `main`. Three are real: `minimatch` (GHSA-c859) and the two indexed `@vitest/mocker` advisories. The other two are false positives:
+  - `@eslint/plugin-kit`, GHSA-7q7g-4xm8-89cq. The upstream range is `*`; the database's is `<0.2.3`, and 0.3.4 is installed.
+  - `esbuild`, GHSA-gv7w-rqvm-qjhr. The upstream range is an open-ended `>=0.17.0`, though it names 0.28.1 as patched. 0.28.1 is installed, and GitHub withdrew its database copy on 2026-06-17.
+- **Bundled copies that no scanner sees**, unchanged by this change:
+  - Vite 7.3.8 bundles `postcss-selector-parser` 7.1.0 and `ws` 8.18.3; see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
+  - Vitest 4.1.11 bundles `ws`, and Vitest's release lockfile resolves it to 8.19.0. That is inside GHSA-37g9-w4hg-h9qr, GHSA-96hv-2xvq-fx4p and GHSA-58qx-3vcg-4xpx. Vitest serves its token-checked API WebSocket with it, which needs Vitest's UI, API or browser mode; none of these is configured here.
+  - Rollup 4.59.0 bundles `picomatch`. Rollup's release lockfile resolves it to 4.0.3, and the bundled code lacks the extglob recursion limit added in 4.0.4. That puts it inside [GHSA-c2c7-rcm5-vvqj](https://github.com/advisories/GHSA-c2c7-rcm5-vvqj) (high, extglob ReDoS) and [GHSA-3v7f-55p6-f55p](https://github.com/advisories/GHSA-3v7f-55p6-f55p) (moderate). Rollup uses it only for include, exclude and watch patterns taken from build configuration.
+- **CodeQL:** 18 open alerts, unchanged. They are a separate track.
+
 ## Open findings (2026-11-23)
 
 Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is published in the package's own repository but, on 2026-11-23, not in GitHub's Advisory Database. Neither Dependabot nor `npm audit` reports those.
 
 | Package | Installed | Dependabot alerts | Advisories | Where it runs |
 |---|---|---|---|---|
-| `brace-expansion` | 1.1.18 · nested 2.1.4 (two copies) | 1, 3, 5, 6 | GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (high); GHSA-q2hr-2g5m-vwhr (moderate); upstream-only GHSA-6jwq-xf8q-xcwh (high), fixed in 1.1.22 / 2.1.8 | lint and build tooling, through `minimatch` |
-| `source-map-js` | 1.2.1 | 8 | GHSA-68fv-2mgg-jv7q (high) | PostCSS, at build time |
+| `brace-expansion` | 1.1.18 · nested 2.1.4 (two copies) | 1, 3, 5, 6 | GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (high); GHSA-q2hr-2g5m-vwhr (moderate); upstream-only GHSA-6jwq-xf8q-xcwh (high), fixed in 1.1.22 / 2.1.8. 1.1.22 / 2.1.8 in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) | lint and build tooling, through `minimatch` |
+| `source-map-js` | 1.2.1 | 8 | GHSA-68fv-2mgg-jv7q (high). 1.2.4 in the CSS and build-toolchain patch set | PostCSS, at build time |
 | `@vitest/mocker` | 4.1.11 | 14, 15 | GHSA-xp26-3454-mjgp and GHSA-qxg6-89mg-rqv8 (moderate) | Vitest; no browser mode, UI or API server is configured |
 | `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6 | **web bundle** |
-| `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6 | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
-| `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate) | installed under `sucrase`; only `sucrase`'s CLI loads it |
-| `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate) | lint and build tooling |
-| `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5. 7.18.6 in the [React Router patch set](#react-router-patch-set--7186) | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
-| `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 in the [React Router patch set](#react-router-patch-set--7186) | a `react-router` dependency; not in any shipped bundle |
-| `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 in the [React Router patch set](#react-router-patch-set--7186) | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
+| `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6. 6.1.6, with 6.0.10 removed, in the CSS and build-toolchain patch set | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
+| `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate). Removed with `sucrase` 3.35.1 in the CSS and build-toolchain patch set | installed under `sucrase`; only `sucrase`'s CLI loads it |
+| `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate). The CSS and build-toolchain patch set removes the `glob` copy; the `typescript-estree` copy remains (see [What this leaves open](#what-this-leaves-open)) | lint and build tooling |
+| `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5. 7.18.6 on `main` since `ae201aff` ([React Router patch set](#react-router-patch-set--7186)) | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
+| `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 on `main` since `ae201aff` | a `react-router` dependency; not in any shipped bundle |
+| `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 on `main` since `ae201aff` | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
 
-The last three rows stay open on `main` until the React Router patch set merges.
+The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The rows the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) addresses stay open on `main` until its pull request merges. The `minimatch` row stays open after that too.
 
 **Planned order (status: planning only).** Each step will be its own bounded PR, re-measured before it starts:
-1. the React Router patch set (Draft pull request opened 2026-11-23; see [React Router patch set](#react-router-patch-set--7186));
-2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography`;
-3. the test and lint toolchain: `vitest` and `typescript-eslint`;
+1. the React Router patch set (merged 2026-11-23 as `ae201aff`; see [React Router patch set](#react-router-patch-set--7186));
+2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (Draft pull request opened 2026-11-23; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
+3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy;
 4. a separate Zod 4 migration, which needs application changes.
 
 The 18 open CodeQL alerts are outside this document; see [Purpose and authority](#purpose-and-authority).
@@ -488,13 +622,14 @@ On 2026-11-23 both `npm audit` and `npm audit --omit=dev` exit **nonzero** becau
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation and the proposed [React Router patch set](#react-router-patch-set--7186), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation, the merged [React Router patch set](#react-router-patch-set--7186) and the proposed [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
-- a **new React Router advisory** is published, particularly one whose affected range reaches the installed version: **7.18.2**, or **7.18.6** with the [React Router patch set](#react-router-patch-set--7186). That would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
+- a **new React Router advisory** is published, particularly one whose affected range reaches the installed version, **7.18.6** since the [React Router patch set](#react-router-patch-set--7186). That would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
+- a change adds `@tailwindcss/typography` back. Every release through 0.5.20 exact-pins `postcss-selector-parser` 6.0.10, which is inside GHSA-rj75-hqrm-r3gf and GHSA-67xj-gfww-g738 (see [Removing `@tailwindcss/typography`](#removing-tailwindcsstypography));
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
 - the toolchain moves to a new major (Vite, Vitest, or Node engine), which can re-open transitive ranges;
 - a package's own repository publishes an advisory that covers an installed version before GitHub's Advisory Database lists it.
