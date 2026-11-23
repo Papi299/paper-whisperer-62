@@ -39,7 +39,7 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 
 **After the test and lint toolchain patch set merged (2026-11-23).** PR #371 merged at 18:43:58 UTC as `94ef1b2c`, and Production `dpl_8tc4Jr8v` was built from it. On that commit, `npm audit` measured 1 full and 1 production finding, both `zod`, as projected above. Dependabot reported alerts 14, 15 and 20 fixed at 18:45:15 UTC and opened none, which left **1 open alert**: 16 (`zod`). CodeQL still showed 18.
 
-**With the [Zod 4 migration](#zod-4-migration) (2026-11-24).** This change's lockfile (`package-lock.json` SHA-256 `48869379…`) measures **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stays open until this change merges. Closing it would leave no open Dependabot alert, but that is a projection: re-read the alert list after the merge.
+**With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `48869379…`) measures **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stays open until this change merges. Closing it would leave no open Dependabot alert, but that is a projection: re-read the alert list after the merge.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -475,7 +475,7 @@ Neither pull request was modified.
 
 - The two pull requests touch disjoint entries, and neither depends on the other. `git merge-tree` combines their heads without conflict. The resulting tree, `2c57a307`, is this change's commit tree, so the fresh resolution from `main` reproduces both pull requests together, byte for byte.
 - At their current heads, both had successful `validate`, `db-tests`, `e2e-local`, `e2e-evidence` and `extension` checks, and a skipped CodeQL check. #354's checks ran against its older base.
-- Dependabot could close or rebase both once this change reached `main`. After the merge it closed #370 itself, at 18:46:15 UTC on 2026-11-23. #354 was still open on 2026-11-24.
+- Dependabot could close or rebase both once this change reached `main`. After the merge it closed #370 itself, at 18:46:15 UTC on 2026-11-23. #354 was still open at 22:00 UTC that day.
 
 ### What remains after this change
 
@@ -490,7 +490,7 @@ Neither pull request was modified.
 
 ## Zod 4 migration
 
-**Status: remediated in this change** (`PAPERLUME-SECURITY-ZOD-4-MIGRATION-001`, Draft pull request opened 2026-11-24). The fix reaches `main` only when that pull request merges. On 2026-11-24, `main` `94ef1b2c` still resolved `zod` 3.25.76, and Production `dpl_8tc4Jr8v` was built with it. Unlike the patch sets above, Zod ships in the web bundle, and the major upgrade needed application changes.
+**Status: remediated in this change** (`PAPERLUME-SECURITY-ZOD-4-MIGRATION-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. At 22:00 UTC on 2026-11-23, `main` `94ef1b2c` still resolved `zod` 3.25.76, and Production `dpl_8tc4Jr8v` was built with it. Unlike the patch sets above, Zod ships in the web bundle, and the major upgrade needed application changes.
 
 | Field | Value |
 |---|---|
@@ -631,7 +631,7 @@ The React Router patch set merged as `ae201aff`, so the last three rows are reso
 1. the React Router patch set (merged 2026-11-23 as `ae201aff`; see [React Router patch set](#react-router-patch-set--7186));
 2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (merged 2026-11-23 as `802d96b8`; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
 3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy (merged 2026-11-23 as `94ef1b2c`; see [Test and lint toolchain patch set](#test-and-lint-toolchain-patch-set));
-4. a separate Zod 4 migration, which needs application changes (Draft pull request opened 2026-11-24; see [Zod 4 migration](#zod-4-migration)).
+4. a separate Zod 4 migration, which needs application changes (Draft pull request opened 2026-11-23; see [Zod 4 migration](#zod-4-migration)).
 
 The 18 open CodeQL alerts are outside this document's counts; see [Purpose and authority](#purpose-and-authority) and the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 
