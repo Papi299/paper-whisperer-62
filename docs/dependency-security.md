@@ -7,8 +7,26 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A separate CodeQL triage track will classify them (**status: planning only**).
 
 ## Current audit state
+
+**Dated snapshot, 2026-11-23.** `npm audit` after a clean `npm ci` that did not mutate `package-lock.json`:
+
+| Graph | `main` `dee28f4d` (before the Vite remediation) | With the [Vite remediation](#vite-development-server-rce--remediated) (`package-lock.json` SHA-256 `8ab396ef…`) |
+|---|---|---|
+| Full (incl. dev) | **17** — 4 high / 13 moderate | **16** — 3 high / 13 moderate |
+| Production only | **7** — 3 high / 4 moderate | **7** — 3 high / 4 moderate |
+
+`npm audit` counts package entries, including the parents through which a vulnerable package is reached. The advisories behind these counts are listed under [Open findings](#open-findings-2026-11-23). **Neither graph is clean:** advisories published or revised after the 2026-09-20 measurement reopened both graphs with no change to this repository.
+
+GitHub's Dependabot reported **15 open alerts** on `main` `dee28f4d` on 2026-11-23. Alerts 9–13 are the five indexed Vite advisories that the Vite remediation also moves past. GitHub closes alerts only after a change reaches `main`, so confirm their state there. The critical Vite advisory itself reached neither Dependabot nor `npm audit`: on 2026-11-23 it was published in the Vite repository but not in GitHub's Advisory Database.
+
+A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
+
+The previously recorded `nanoid` high remains **remediated** by a lockfile-only in-range resolution — see [NanoID finding](#nanoid-finding--remediated).
+
+### Historical measurement (2026-09-20)
 
 `npm audit` measured **2026-09-20**, on a clean `npm ci` that did not mutate `package-lock.json`, against `main` `07c68c0b73362789e6b2e6b3b4a8e782dbde1be7` plus the [Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade) lockfile (`package-lock.json` SHA-256 `90bd52938ba1a0edaed858fbd56cf65a6d3d96445ef5730209cacdb9d92fb142`):
 
@@ -17,13 +35,9 @@
 | Full (incl. dev) | **0** | 0 | 0 | 0 | 0 |
 | Production only | **0** | 0 | 0 | 0 | 0 |
 
-**Both graphs are at zero as measured on 2026-09-20.** The last outstanding finding, the dev-only [GHSA-82fw-gwwq-j7x9](#vitest-residual--remediated-by-a-major-upgrade), was cleared by upgrading `vitest` from the unmaintained 3.x line to **4.1.11**. No finding of any severity is outstanding.
+**Both graphs measured zero on 2026-09-20.** The last finding outstanding at that time, the dev-only [GHSA-82fw-gwwq-j7x9](#vitest-residual--remediated-by-a-major-upgrade), was cleared by upgrading `vitest` from the unmaintained 3.x line to **4.1.11**. No finding of any severity was outstanding at that measurement.
 
-**How the graphs got here.** After [Cluster 5](#react-router-cluster-5--complete) both graphs measured zero, and that was true at the time. Advisories published or revised between 2026-09-01 and 2026-09-08 then reopened them with no change to this repository: on `main` `20b57562` the full graph measured **6 (2 high / 3 moderate / 1 low)** and the production graph **1 low**. Advisory remediation 002 cleared every finding that had a compatible in-range fix and took the full graph to **2 moderate**, leaving only the Vitest family; the 2026-09-20 Vitest major upgrade then took it to **0**.
-
-A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
-
-The previously recorded `nanoid` high remains **remediated** by a lockfile-only in-range resolution — see [NanoID finding](#nanoid-finding--remediated).
+**How the graphs got there.** After [Cluster 5](#react-router-cluster-5--complete) both graphs measured zero, and that was true at the time. Advisories published or revised between 2026-09-01 and 2026-09-08 then reopened them with no change to this repository: on `main` `20b57562` the full graph measured **6 (2 high / 3 moderate / 1 low)** and the production graph **1 low**. Advisory remediation 002 cleared every finding that had a compatible in-range fix and took the full graph to **2 moderate**, leaving only the Vitest family; the 2026-09-20 Vitest major upgrade then took it to **0**.
 
 ## Completed remediation boundaries
 
@@ -37,7 +51,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta.
 
 ## Current resolved security baseline
 
@@ -45,18 +59,85 @@ These resolutions must not regress. A change that moves any of them backwards re
 
 | Cluster | Packages |
 |---|---|
-| 1 | `vite` 7.3.6 · `vitest` 3.2.7 — **superseded by 4.1.11** ([Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade)) · `postcss` 8.5.26 |
+| 1 | `vite` 7.3.6 — **superseded by 7.3.8** ([Vite development-server RCE](#vite-development-server-rce--remediated)) · `vitest` 3.2.7 — **superseded by 4.1.11** ([Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade)) · `postcss` 8.5.26 |
 | 2 | `lodash` 4.18.1 · `ws` 8.21.3 · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
 | 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
 | 5 | `react-router` **7.18.2** (declared `^7.18.2`) · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 |
 | Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) |
 | Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** |
+| Vite dev-server RCE | `vite` **7.3.8** (declared `^7.3.1`) |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
 Cluster 5 **superseded** the Cluster 4 baseline: `react-router-dom` and `@remix-run/router` are no longer installed at all, so the terminal v6 resolutions they pinned no longer exist in the graph. `cookie` and `set-cookie-parser` are `react-router@7`'s own direct dependencies, not incidental churn.
 
 Outside the clusters, **`nanoid` 3.3.18** is also a security-relevant resolution that must not regress — see [NanoID finding](#nanoid-finding--remediated).
+
+## Vite development-server RCE — REMEDIATED
+
+**Status: REMEDIATED** by `PAPERLUME-SECURITY-VITE-DEVSERVER-RCE-001` (2026-11-23): `package-lock.json` resolves `vite` **7.3.8**. The advisory was found by `PAPERLUME-SECURITY-DEPENDENCY-AUDIT-001`, which compared every installed version with the advisories each package's own repository has published, not only with GitHub's Advisory Database.
+
+| Field | Value |
+|---|---|
+| Advisory | [GHSA-p4f5-76q4-ffq7](https://github.com/vitejs/vite/security/advisories/GHSA-p4f5-76q4-ffq7) — "Remote code execution using `__vite-browser-external` virtual module" (CWE-116) |
+| Severity | **Critical**, CVSS 4.0 **9.1** (`AV:N/AC:L/AT:P/PR:N/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N`); no CVE was assigned when this was recorded |
+| Published | 2026-11-10, in the `vitejs/vite` repository. On 2026-11-23 it was **not** in GitHub's Advisory Database, so it produced no Dependabot alert and no `npm audit` finding |
+| Affected (7.x line) | `>=7.0.0 <=7.3.7`. Other lines: 4.0.0 through 6.4.5, and 8.x before 8.1.7, 8.2.5 or 8.3.7 |
+| Patched (7.x line) | **7.3.8** |
+| Installed before | `vite` **7.3.6** (declared `^7.3.1`), inside the affected range |
+| Installed now | `vite` **7.3.8**, outside it |
+
+### Exposure: the development server, not Production
+
+- The advisory needs a Vite **development server** that an attacker can reach over the network. An HTTP request to that server could then read files outside `server.fs.allow` and run code on the machine serving it.
+- `vite.config.ts` sets `server.host: "::"` and `server.port: 8080`, so `npm run dev` listens on every interface. That meets the precondition whenever the development server runs and the network can reach it: local development, the local E2E lifecycle (Playwright starts `npm run dev`), and the E2E jobs on CI runners.
+- **Production does not run the development server.** Vercel serves the static output of `vite build`, and no development-server endpoint is deployed. The exposure was on machines that run `npm run dev`; a developer workstation also holds developer credentials.
+- Nothing here assumes the advisory was exploited, and no exploitation was investigated or demonstrated. The remediation is version-based, and the published proof of concept was not run.
+
+### Why 7.3.8 and not 7.3.7
+
+Dependabot's PR #353 proposes 7.3.7. That release fixes the five indexed Vite advisories below, but it is still inside this advisory's affected range (`<=7.3.7`).
+
+### Remediation applied
+
+- `npm update vite --package-lock-only`. The dependency delta is the single `node_modules/vite` entry in `package-lock.json`: `version`, `resolved` and `integrity` only. 7.3.8 declares the same `dependencies`, `optionalDependencies`, peer dependencies and `engines` as 7.3.6, so no other entry moved.
+- `package.json` was **not** modified, because `"vite": "^7.3.1"` already permits 7.3.8. No `overrides` entry was added, and `npm audit fix` was not run.
+- 7.3.8 bundles `launch-editor` and `launch-editor-middleware` **2.14.2** in place of 2.14.1.
+- **No built file changed.** Built side by side from clean installs with CI's placeholder environment, `main` `dee28f4d` and this lockfile produce byte-identical `dist/` (9 files) and `dist-extension/` (8 files). Lint, the three typechecks and the Vitest suite give the same results on both.
+- 7.3.8 is also past the five indexed advisories behind Dependabot alerts 9–13, all fixed in 7.3.7: [GHSA-587h-7wmj-h5pm](https://github.com/advisories/GHSA-587h-7wmj-h5pm) (high), [GHSA-698v-4r3x-3vcv](https://github.com/advisories/GHSA-698v-4r3x-3vcv), [GHSA-r825-w8mm-5pxw](https://github.com/advisories/GHSA-r825-w8mm-5pxw) and [GHSA-rq7h-c2jc-7f22](https://github.com/advisories/GHSA-rq7h-c2jc-7f22) (moderate), and [GHSA-9jrq-w75r-8gcw](https://github.com/advisories/GHSA-9jrq-w75r-8gcw) (low). `npm audit` no longer reports them.
+
+### Residual: Vite's bundled `postcss-selector-parser`
+
+Vite 7.3.x bundles its own copy of `postcss-selector-parser` **7.1.0** inside `vite/dist`, and 7.3.8 still does. That copy lies inside the affected ranges of GHSA-rj75-hqrm-r3gf, GHSA-w9m9-85wc-3x92 and the upstream-only GHSA-67xj-gfww-g738.
+- Scanners cannot see it, because it has no `package-lock.json` entry.
+- Vite runs it only for CSS Modules, and the repository has no `*.module.css` files.
+
+Reassess when a Vite 7.x release bundles `postcss-selector-parser` 7.1.8 or later, or if CSS Modules are adopted.
+
+## Open findings (2026-11-23)
+
+Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is published in the package's own repository but, on 2026-11-23, not in GitHub's Advisory Database. Neither Dependabot nor `npm audit` reports those.
+
+| Package | Installed | Dependabot alerts | Advisories | Where it runs |
+|---|---|---|---|---|
+| `brace-expansion` | 1.1.18 · nested 2.1.4 (two copies) | 1, 3, 5, 6 | GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (high); GHSA-q2hr-2g5m-vwhr (moderate); upstream-only GHSA-6jwq-xf8q-xcwh (high), fixed in 1.1.22 / 2.1.8 | lint and build tooling, through `minimatch` |
+| `source-map-js` | 1.2.1 | 8 | GHSA-68fv-2mgg-jv7q (high) | PostCSS, at build time |
+| `@vitest/mocker` | 4.1.11 | 14, 15 | GHSA-xp26-3454-mjgp and GHSA-qxg6-89mg-rqv8 (moderate) | Vitest; no browser mode, UI or API server is configured |
+| `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6 | **web bundle** |
+| `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6 | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
+| `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate) | installed under `sucrase`; only `sucrase`'s CLI loads it |
+| `minimatch` | 9.0.9 (two copies) | — | GHSA-g3hv-75wg-m249 (moderate; `npm audit` reports it, Dependabot has no alert); upstream-only GHSA-c859-jr93-m5j4 (moderate) | lint and build tooling |
+| `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5 | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
+| `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3 | a `react-router` dependency; not in the shipped bundle |
+| `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0 | Node only: jsdom in tests, and `@supabase/realtime-js` outside the browser |
+
+**Planned order (status: planning only).** Each step will be its own bounded PR, re-measured before it starts:
+1. the React Router patch set;
+2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography`;
+3. the test and lint toolchain: `vitest` and `typescript-eslint`;
+4. a separate Zod 4 migration, which needs application changes.
+
+The 18 open CodeQL alerts are outside this document; see [Purpose and authority](#purpose-and-authority).
 
 ## NanoID finding — REMEDIATED
 
@@ -283,13 +364,14 @@ npm audit                    # full graph (nonzero exit is expected while findin
 npm audit --omit=dev         # production graph
 npm ls <package> --all       # every installed occurrence
 npm explain <package>        # introduction path and parent semver range
+gh api "repos/<owner>/<repo>/security-advisories?state=published"   # advisories a package's own repository has published
 ```
 
-**Both** `npm audit` and `npm audit --omit=dev` currently exit zero, as measured on 2026-09-20. A **nonzero** exit from either now means a new advisory has appeared — there is no longer an expected residual to discount. Investigate any entry rather than treating a nonzero exit as normal. *(Historically the full audit was expected to exit nonzero because of the Vitest residual; that stopped being true when `vitest` moved to 4.1.11.)*
+On 2026-11-23 both `npm audit` and `npm audit --omit=dev` exit **nonzero** because of the [open findings](#open-findings-2026-11-23). Compare each entry with that list; anything not on it is new and needs investigating. `npm audit` reads only GitHub's Advisory Database. It cannot report an advisory that a package's own repository has published before GitHub lists it, as happened with the Vite RCE. *(Both commands exited zero as measured on 2026-09-20. Before that measurement, the full audit was expected to exit nonzero because of the Vitest residual.)*
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs:
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger and the React Router trigger had all fired. Apart from the Vite remediation, the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
@@ -297,7 +379,8 @@ Revisit this document when any of the following occurs:
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
-- the toolchain moves to a new major (Vite, Vitest, or Node engine), which can re-open transitive ranges.
+- the toolchain moves to a new major (Vite, Vitest, or Node engine), which can re-open transitive ranges;
+- a package's own repository publishes an advisory that covers an installed version before GitHub's Advisory Database lists it.
 
 ## Deployment note
 
