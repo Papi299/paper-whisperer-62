@@ -14,7 +14,10 @@ import { DEFAULT_POST_AUTH_PATH, parseSafeReturnTo } from "@/lib/safeReturnTo";
 
 const authSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
-  password: z.string().min(6, "Password must be at least 6 characters"),
+  // Six UTF-16 units (`String.length`), as before Zod 4 and as ResetPassword
+  // checks. Zod 4.5+ `.min()` counts code points instead, which would newly
+  // refuse a password such as "😀😀😀" here.
+  password: z.string().refine((value) => value.length >= 6, "Password must be at least 6 characters"),
 });
 
 const Auth = () => {

@@ -208,6 +208,33 @@ describe("Auth — sign-in validation", () => {
     expect(auth.signInWithPassword).not.toHaveBeenCalled();
   });
 
+  // Zod 4.5+ `.min()` counts code points; the page keeps Zod 3's `String.length`
+  // rule, so passwords with astral characters validate exactly as before.
+  it.each([
+    ["three emoji (6 UTF-16 units, 3 code points)", "😀😀😀"],
+    ["four letters and an emoji (6 units, 5 code points)", "abcd😀"],
+  ])("still accepts %s, as before Zod 4", async (_label, password) => {
+    renderAuth();
+    typeInto(field("signin-email"), "user@example.com");
+    typeInto(field("signin-password"), password);
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+    await settle();
+
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    expect(auth.signInWithPassword).toHaveBeenCalledWith({ email: "user@example.com", password });
+  });
+
+  it("still rejects five UTF-16 units, emoji included (\"abc😀\")", async () => {
+    renderAuth();
+    typeInto(field("signin-email"), "user@example.com");
+    typeInto(field("signin-password"), "abc😀");
+    fireEvent.click(screen.getByRole("button", { name: "Sign In" }));
+    await settle();
+
+    expectFieldError("signin-password", "signin-password-error", PASSWORD_ERROR);
+    expect(auth.signInWithPassword).not.toHaveBeenCalled();
+  });
+
   it("accepts a password of exactly six characters (the boundary)", async () => {
     renderAuth();
     typeInto(field("signin-email"), "user@example.com");
