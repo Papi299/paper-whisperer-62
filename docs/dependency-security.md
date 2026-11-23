@@ -33,6 +33,10 @@ GitHub's Dependabot reported **15 open alerts** on `main` `dee28f4d` on 2026-11-
 
 Dependabot closes an alert only after a change reaches `main`. This change should close alerts 1, 3, 5, 6, 8, 17 and 18, and leave alerts 14, 15, 16 and 20 open. That is a projection: after the merge, re-read the alert list, because the same rescan can also open alerts, as it did with alert 20.
 
+**After the CSS and build-toolchain patch set merged (2026-11-23).** It merged as `802d96b8`. On that commit, `npm audit` measured 10 full and 1 production, as projected above, and Dependabot showed **4 open alerts**: 14, 15, 16 and 20. Alerts 1, 3, 5, 6, 8, 17 and 18 had closed as fixed, and no alert had opened. CodeQL still showed 18.
+
+**With the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `e01b6944…`) measures **1** full and **1** production finding, both `zod` (high). It removes nine entries from the full report: `minimatch`, the six `typescript-eslint` entries that reach it, `@vitest/mocker` and `vitest`. The production report is unchanged. This change should close alerts 14, 15 and 20 and leave alert 16 open. That is again a projection, to be re-read after the merge.
+
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
 The previously recorded `nanoid` high remains **remediated** by a lockfile-only in-range resolution — see [NanoID finding](#nanoid-finding--remediated).
@@ -62,7 +66,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`. It is not complete until its pull request merges.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`, and it merged on 2026-11-23 as `802d96b8`. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) is next. Its dependency delta is `package-lock.json` plus two raised `devDependencies` declarations in `package.json`. It is not complete until its pull request merges.
 
 ## Current resolved security baseline
 
@@ -75,10 +79,11 @@ These resolutions must not regress. A change that moves any of them backwards re
 | 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
 | 5 | `react-router` **7.18.2** (declared `^7.18.2`) — **superseded by 7.18.6** · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 — **superseded by 2.7.3**, both in the [React Router patch set](#react-router-patch-set--7186) |
 | Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) — **superseded by 6.1.6** in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set), which also removes the nested 6.0.10 |
-| Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** |
+| Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** — **superseded by 4.1.12** (declared `^4.1.12`), with `chai` **6.3.0**, in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) |
 | Vite dev-server RCE | `vite` **7.3.8** (declared `^7.3.1`) |
 | React Router patch set (merged as `ae201aff`) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
-| CSS and build-toolchain patch set (this change; on `main` only once its pull request merges) | `source-map-js` **1.2.4** · `brace-expansion` **1.1.22** (nested v2 line **2.1.8**) · `postcss-selector-parser` **6.1.6** · `sucrase` **3.35.1** · `glob` and `@tailwindcss/typography` no longer installed |
+| CSS and build-toolchain patch set (merged as `802d96b8`) | `source-map-js` **1.2.4** · `brace-expansion` **1.1.22** (nested v2 line **2.1.8** — replaced by the nested v5 line **5.1.0** in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set)) · `postcss-selector-parser` **6.1.6** · `sucrase` **3.35.1** · `glob` and `@tailwindcss/typography` no longer installed |
+| Test and lint toolchain patch set (this change; on `main` only once its pull request merges) | `typescript-eslint` and the ten `@typescript-eslint/*` packages **8.73.0** (declared `^8.73.0`) · nested `minimatch` **11.0.9**, with `brace-expansion` **5.1.0** below it · `vitest`, `@vitest/mocker` and the other `@vitest/*` packages **4.1.12** (declared `^4.1.12`) · `chai` **6.3.0** |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -227,7 +232,7 @@ This change leaves every other [open finding](#open-findings-2026-11-23) as it w
 
 ## CSS and build-toolchain patch set
 
-**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-CSS-BUILD-CLUSTER-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. On 2026-11-23, `main` `ae201aff` still resolved the "before" versions below, and Production `dpl_HjkGBrVw` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build and CSS equivalence](#build-and-css-equivalence)).
+**Status: REMEDIATED on `main`** (`PAPERLUME-SECURITY-CSS-BUILD-CLUSTER-001`). PR #369 merged on 2026-11-23 as `802d96b8`, and that day's automatic Production deployment, `dpl_EULvMp3j`, was built from it. Before the merge, `main` `ae201aff` resolved the "before" versions below, and Production `dpl_HjkGBrVw` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build and CSS equivalence](#build-and-css-equivalence)). The rest of this section was written while the pull request was open.
 
 | Package | Before → after | Reached through | Advisories | Dependabot |
 |---|---|---|---|---|
@@ -351,6 +356,133 @@ After this change reaches `main`, expect Dependabot to rebase or close these pul
   - Rollup 4.59.0 bundles `picomatch`. Rollup's release lockfile resolves it to 4.0.3, and the bundled code lacks the extglob recursion limit added in 4.0.4. That puts it inside [GHSA-c2c7-rcm5-vvqj](https://github.com/advisories/GHSA-c2c7-rcm5-vvqj) (high, extglob ReDoS) and [GHSA-3v7f-55p6-f55p](https://github.com/advisories/GHSA-3v7f-55p6-f55p) (moderate). Rollup uses it only for include, exclude and watch patterns taken from build configuration.
 - **CodeQL:** 18 open alerts, unchanged. They are a separate track.
 
+## Test and lint toolchain patch set
+
+**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-TEST-LINT-CLUSTER-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. On 2026-11-23, `main` `802d96b8` still resolved the "before" versions below, and Production `dpl_EULvMp3j` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build output comparison](#build-output-comparison)).
+
+| Package | Before → after | Reached through | Advisories | Dependabot |
+|---|---|---|---|---|
+| `minimatch` | nested 9.0.9 → **11.0.9** | `typescript-eslint` → `@typescript-eslint/typescript-estree`. The root 3.1.5 copy, which ESLint uses, does not move | [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (moderate, CVE-2026-118764): denial of service through globparts amplification, `>=7.0.0 <11.0.1`; upstream-only [GHSA-c859-jr93-m5j4](https://github.com/isaacs/minimatch/security/advisories/GHSA-c859-jr93-m5j4) (moderate): `minimatch.escape()` output that matches more or less than its input, `>=7.4.0 <=11.0.7`, fixed in 11.0.8 | alert 20 |
+| `@vitest/mocker` | 4.1.11 → **4.1.12** | `vitest` | [GHSA-qxg6-89mg-rqv8](https://github.com/advisories/GHSA-qxg6-89mg-rqv8) (moderate, CVE-2026-112949): code injection through unauthenticated manual-mock registration, `>=2.1.0-beta.7 <4.1.12`; [GHSA-xp26-3454-mjgp](https://github.com/advisories/GHSA-xp26-3454-mjgp) (moderate, CVE-2026-112950): a Windows backslash traversal that bypasses the redirect allowlist added in 4.1.11, `>=4.1.11 <4.1.12` | alerts 14, 15 |
+| `typescript-eslint` and the ten `@typescript-eslint/*` packages | 8.38.0 → **8.73.0** (declared `^8.73.0`) | root `devDependencies` | none of their own. 8.73.0 is the first `typescript-estree` release to declare `minimatch` `^11.0.1`; 8.72.2 still declares `^10.2.2` | — |
+| `vitest` and the six other `@vitest/*` packages | 4.1.11 → **4.1.12** (declared `^4.1.12`) | root `devDependencies` | none of their own. `npm audit` lists `vitest` only as the parent of `@vitest/mocker` | — |
+
+### Where the two families run
+
+- Both are development tools. ESLint loads `typescript-eslint` during `npm run lint`, and `npm test` runs Vitest. Neither reaches the web bundle or the extension.
+- **`minimatch` under `typescript-estree`.** `typescript-estree` uses it in one place: matching file paths against the project service's `allowDefaultProject` patterns. `eslint.config.js` enables neither `projectService` nor `project`, so lint never compiles a pattern with it, and any pattern it could compile would come from the repository's own configuration.
+- **`@vitest/mocker`.** Both advisories sit in `interceptorPlugin`, the handler that accepts `vitest:interceptor:register` messages on a Vite development server's WebSocket. The public `mockerPlugin()` and `interceptorPlugin()` exports attach it.
+  - No first-party file imports `@vitest/mocker`, `mockerPlugin` or `interceptorPlugin`. `@vitest/browser` and `@vitest/ui` are not installed, and `vitest.config.ts` sets no `browser`, `api` or `server` option.
+  - Vitest's own Node runner imports only `hoistMocksPlugin` and `automockPlugin` from `@vitest/mocker/node`, in 4.1.11 and 4.1.12 alike.
+  - The other function 4.1.12 hardens, `createManualModuleSource`, is reached in Vitest only through its native-module mocker. Vitest loads that mocker only when `experimental.viteModuleRunner` is `false`, and `vitest.config.ts` sets no `experimental` option.
+  - GHSA-xp26 also needs Windows. CI runs on `ubuntu-24.04`, and the local development machine runs macOS.
+  - The application's development server (`npm run dev`, `host: "::"`) loads only `@vitejs/plugin-react-swc`, not the interceptor plugin.
+- Neither advisory's code path is therefore reachable in this repository's test setup. As with [NanoID](#applicability), the remediation does not rest on that. Compatible patched releases exist, so the [remediation policy](#remediation-policy) applies them.
+
+### Why these versions
+
+- **`typescript-eslint` 8.73.0** (2026-11-16).
+  - It is the first release whose `typescript-estree` accepts `minimatch` 11.
+  - Its peers are `eslint` `^8.57.0 || ^9.0.0 || ^10.0.0` and `typescript` `>=4.8.4 <6.1.0`. ESLint 9.32.0 and TypeScript 5.8.3 are installed, and neither changes. Its `engines` field is `^18.18.0 || ^20.9.0 || >=21.1.0`.
+  - `typescript-estree` 8.73.0 adds an optional peer, `@typescript/native`, for the TypeScript 7 native preview. Because it is optional, nothing is installed for it.
+  - 8.74.0 was published on 2026-11-23, the day of this change, and was not adopted. Its changelog lists rule features and fixes, none of them security fixes. A release less than a day old has also had no time to settle. `^8.73.0` admits it, so a later update can take it.
+- **`minimatch` 11.0.9** (`latest`, 2026-11-16) is what `^11.0.1` resolves to. It is outside all seven advisories the `minimatch` repository has published, including the 11.x-only upstream advisories GHSA-cf2h-pxjq-68xw (`11.0.0`–`11.0.6`) and GHSA-hqmv-qgp3-jx75 (`11.0.3`–`11.0.7`). Its `engines` field is `20 || >=22`; CI runs Node 22 and Vercel runs Node 24.
+- **`vitest` 4.1.12** (the `V4` dist-tag, 2026-10-15) is the newest 4.x release. 5.x would be a major upgrade, which is out of scope.
+  - Its release notes list one change, the mocker hardening.
+  - Its own published code differs from 4.1.11 only in the version string and two chunk file names.
+  - `@vitest/mocker` 4.1.12 changes only the two code paths the advisories name. It serializes the module URL and export names with `JSON.stringify`, and it turns backslashes in a redirect path into forward slashes before the allowlist check.
+- **`brace-expansion` 5.1.0** is new on this path, because `minimatch` 11.0.9 declares `^5.0.12`.
+  - 5.0.12 is inside the upstream-only [GHSA-6jwq-xf8q-xcwh](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6jwq-xf8q-xcwh), fixed in 5.0.13.
+  - npm resolves the `latest` release, 5.1.0, published on 2026-11-23 at 15:56 UTC. Its `gitHead` is the upstream `v5.1.0` tag.
+  - Compared with 5.0.13, its only code change is a `default` export alias for `expand`.
+
+### Resolution and lockfile delta
+
+From `main` `802d96b8`:
+
+```bash
+npm install --save-dev --package-lock-only typescript-eslint@8.73.0 vitest@4.1.12
+```
+
+- `package.json` changes two `devDependencies` declarations: `typescript-eslint` goes from `^8.38.0` to `^8.73.0`, and `vitest` from `^4.1.11` to `^4.1.12`. Raising the floors keeps a later resolution from dropping below the patched versions. No `overrides` entry was added, and `npm audit fix` was not run.
+- `package-lock.json` goes from 525 to 527 entries. Every moved entry is dev-only, and no version goes down.
+  - **28 version updates:**
+    - `typescript-eslint` and its ten `@typescript-eslint/*` packages, 8.38.0 → 8.73.0, and the eight Vitest packages, 4.1.11 → 4.1.12;
+    - the nested `minimatch` 9.0.9 → 11.0.9, and below it `brace-expansion` 2.1.8 → 5.1.0;
+    - four packages whose old versions miss a new floor:
+      - `semver` 7.7.2 → 7.8.6, for `^7.7.3`; `typescript-estree` is the only package that uses this copy;
+      - `ts-api-utils` 2.1.0 → 2.5.0, for `^2.5.0`;
+      - `@eslint-community/eslint-utils` 4.7.0 → 4.10.1, for `^4.9.1`;
+      - `@eslint-community/regexpp` 4.12.1 → 4.12.3, for `^4.12.2`. ESLint's own ranges, `^4.2.0` and `^4.12.1`, accept both new versions;
+    - three moves that no new floor requires: `chai` 6.2.2 → 6.3.0, `tinyrainbow` 3.1.1 → 3.2.0, and `ignore` 7.0.5 → 7.0.16, nested under `@typescript-eslint/eslint-plugin`.
+      - Each one's only dependents are packages this change upgrades, and npm re-resolves such a dependency to the newest release in range.
+      - `npm update`, `--prefer-dedupe` and both Dependabot pull requests produce the same three moves. Avoiding them would take a hand-edited lockfile or an `overrides` entry, which the policy forbids.
+      - Each stays within its major version.
+  - **3 additions:**
+    - `eslint-visitor-keys` 5.0.1, nested under `@typescript-eslint/visitor-keys`, which now declares `^5.0.0`. ESLint 9 keeps the hoisted 4.2.1;
+    - `minimatch` 11's two dependencies, `balanced-match` 4.0.4 (nested) and `@isaacs/nonrecursive-glob-match` 1.1.0.
+  - **1 removal:** `graphemer` 1.4.0, which `@typescript-eslint/eslint-plugin` no longer uses.
+  - There are no flag-only changes. The root entry's `devDependencies` change, matching `package.json`.
+- **The result is reproducible.**
+  - Running the two updates one at a time (twice) or as the single command above gives the same lockfile, SHA-256 `e01b6944…`.
+  - A later `npm install --package-lock-only` changes nothing.
+  - `npm ci` leaves the lockfile unchanged, and `npm ls --all` exits 0. The only new unmet optional dependency it lists is the `@typescript/native` peer.
+- **Registry and provenance.**
+  - Every `resolved` URL is on `registry.npmjs.org`, and every sha512 integrity matches the registry's. No moved or added entry has an install script.
+  - `npm audit signatures` verifies the registry signatures of all 468 installed packages, and 80 provenance attestations. On `main` the figures are 466 and 67.
+  - Four of the 31 moved or added entries carry no provenance attestation: `brace-expansion` 5.1.0, `balanced-match` 4.0.4, `ignore` 7.0.16 and `@isaacs/nonrecursive-glob-match` 1.1.0. The npm account that published each one is that package's maintainer.
+  - `@isaacs/nonrecursive-glob-match` is new to the tree. It comes from `minimatch`'s author and declares no repository. Its `gitHead` matches the `v1.1.0` tag of `isaacs/nonrecursive-glob-match`, which has published no advisory. Its tarball has no install script, and its code makes no network, child-process, `eval` or `new Function` call.
+- **What is left of each family.**
+  - `minimatch` 3.1.5, used by ESLint, `@eslint/config-array` and `@eslint/eslintrc`, is outside every `minimatch` advisory; the 3.x line was fixed in 3.1.3 and 3.1.4. No 9.x copy remains.
+  - `brace-expansion` resolves to 1.1.22 under `minimatch` 3.1.5 and to 5.1.0 under 11.0.9. Both are past GHSA-6jwq.
+
+### Lint, typecheck and test comparison
+
+Both sides were measured locally after a clean `npm ci`, on Node 26.5.1 and npm 11.17.0.
+- **Lint.**
+  - `npm run lint` reports 0 errors and 18 warnings on both sides, over the same 711 files. Every diagnostic matches on file, line, column, rule and message, and the whole output is identical apart from timing.
+  - The 18 are the existing baseline: 9 `react-refresh/only-export-components`, 8 `react-hooks/exhaustive-deps` and 1 unused `eslint-disable` directive.
+  - `eslint.config.js` is unchanged. The `tseslint.config()` helper it calls has been marked deprecated since 8.42.0, but only as a type annotation, and lint printed no warning.
+- **Typecheck.** All three projects pass on both sides, with identical output.
+- **Vitest.**
+  - `npm test` passes 269 files and 8,895 tests on both sides. The same tests, identified by file and full name, are discovered and pass, and none is skipped.
+  - The suite has no snapshot assertion, and no snapshot file was written. There is no coverage configuration.
+  - It calls `vi.mock` 232 times in 78 files, and each call passes a factory. It also uses `vi.hoisted`, `vi.spyOn`, `vi.stubGlobal`, fake timers in 7 files and Testing Library in 87 files. 59 files run in the `node` environment and the rest in jsdom.
+- **Extension lane.** `npm run test:extension:browser` passes 30 of 30 on both sides, with the same tests.
+- **Other lanes.** The DB Tests lane installs this lockfile but runs neither Vitest nor ESLint. Each E2E job runs 58 Vitest guard tests in `test:e2e:local:verify-guards` before Playwright starts.
+
+### Build output comparison
+
+Both sides were built twice from clean `git archive` trees, with CI's placeholder environment and a clean `npm ci`. The base is `main` `802d96b8`, and the head is this change's lockfile commit `093212bd`.
+- Each side's two builds are byte-identical, and so are the two sides: all 17 files have the same SHA-256.
+- **`dist/`:** 9 files, 2,077,049 B. The stylesheet is `index-DF6xUHEF.css` (79,637 B, SHA-256 `27bf46dd…`), and the entry chunk is `index-CAniE2W6.js` (1,953,050 B).
+- **`dist-extension/`:** 8 files, 22,279 B.
+- The build logs differ only in timings. No package in the build chain moved: Vite and its React plugin, Rollup, esbuild, PostCSS, Tailwind, autoprefixer, browserslist and caniuse-lite all resolve as before.
+
+### Reconciling the Dependabot pull requests
+
+Neither pull request was modified.
+
+| PR | Head · base | Proposes | Relation to this change |
+|---|---|---|---|
+| #370 | `e6db17a7` · `802d96b8` | `typescript-eslint` `^8.73.0` in `package.json`, and `minimatch` 11.0.9 | The same `package.json` line and the same 22 entries: 18 version updates, 3 additions and 1 removal. Its commit message says `minimatch` moves "from 3.1.5"; in fact the root 3.1.5 copy does not move, and the nested 9.0.9 copy does |
+| #354 | `2e142798` · `626f794f`, behind `main` | `vitest` `^4.1.12` in `package.json` | The same `package.json` line and the same 10 entries: the eight Vitest packages, `chai` and `tinyrainbow` |
+
+- The two pull requests touch disjoint entries, and neither depends on the other. `git merge-tree` combines their heads without conflict. The resulting tree, `2c57a307`, is this change's commit tree, so the fresh resolution from `main` reproduces both pull requests together, byte for byte.
+- At their current heads, both had successful `validate`, `db-tests`, `e2e-local`, `e2e-evidence` and `extension` checks, and a skipped CodeQL check. #354's checks ran against its older base.
+- Dependabot may close or rebase both after this change reaches `main`. Verify that separately.
+
+### What remains after this change
+
+- **`zod`** (alert 16) is the only finding left in either `npm audit` graph. There is no 3.x fix, so it needs the separate Zod 4 migration.
+- **`npm audit` with this change:** full 1 and production 1, both `zod` (high). `npm audit` on this lockfile reports no indexed advisory that Dependabot lacks.
+- **Upstream sweep with this change:** 1 match, down from 4 on `main`.
+  - The three real matches on `main` are gone: `minimatch` GHSA-c859 and the two `@vitest/mocker` advisories.
+  - The remaining match is the `@eslint/plugin-kit` false positive recorded for the CSS patch set: the upstream range is `*`, the database's is `<0.2.3`, and 0.3.4 is installed.
+  - The CSS patch set's count also included `esbuild` GHSA-gv7w-rqvm-qjhr. That advisory is filed against esbuild's Deno module, and the sweep now counts only npm-ecosystem entries.
+- **Bundled copies that no scanner sees** are unchanged. Vite 7.3.8 bundles `postcss-selector-parser` 7.1.0 and `ws` 8.18.3. Rollup 4.59.0 bundles `picomatch` 4.0.3. Vitest's bundled `ws` is also unchanged, because Vitest 4.1.12's published code differs from 4.1.11's only in its version string and chunk names.
+- **CodeQL:** 18 open alerts, unchanged. They are a separate track.
+
 ## Open findings (2026-11-23)
 
 Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is published in the package's own repository but, on 2026-11-23, not in GitHub's Advisory Database. Neither Dependabot nor `npm audit` reports those.
@@ -359,21 +491,21 @@ Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is pub
 |---|---|---|---|---|
 | `brace-expansion` | 1.1.18 · nested 2.1.4 (two copies) | 1, 3, 5, 6 | GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (high); GHSA-q2hr-2g5m-vwhr (moderate); upstream-only GHSA-6jwq-xf8q-xcwh (high), fixed in 1.1.22 / 2.1.8. 1.1.22 / 2.1.8 in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) | lint and build tooling, through `minimatch` |
 | `source-map-js` | 1.2.1 | 8 | GHSA-68fv-2mgg-jv7q (high). 1.2.4 in the CSS and build-toolchain patch set | PostCSS, at build time |
-| `@vitest/mocker` | 4.1.11 | 14, 15 | GHSA-xp26-3454-mjgp and GHSA-qxg6-89mg-rqv8 (moderate) | Vitest; no browser mode, UI or API server is configured |
+| `@vitest/mocker` | 4.1.11 | 14, 15 | GHSA-xp26-3454-mjgp and GHSA-qxg6-89mg-rqv8 (moderate). 4.1.12 in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) | Vitest; no browser mode, UI or API server is configured |
 | `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6 | **web bundle** |
 | `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6. 6.1.6, with 6.0.10 removed, in the CSS and build-toolchain patch set | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
 | `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate). Removed with `sucrase` 3.35.1 in the CSS and build-toolchain patch set | installed under `sucrase`; only `sucrase`'s CLI loads it |
-| `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate). The CSS and build-toolchain patch set removes the `glob` copy; the `typescript-estree` copy remains (see [What this leaves open](#what-this-leaves-open)) | lint and build tooling |
+| `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate). The CSS and build-toolchain patch set removes the `glob` copy; the `typescript-estree` copy remains (see [What this leaves open](#what-this-leaves-open)). 11.0.9 in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) | lint and build tooling |
 | `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5. 7.18.6 on `main` since `ae201aff` ([React Router patch set](#react-router-patch-set--7186)) | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
 | `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 on `main` since `ae201aff` | a `react-router` dependency; not in any shipped bundle |
 | `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 on `main` since `ae201aff` | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
 
-The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The rows the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) addresses stay open on `main` until its pull request merges. The `minimatch` row stays open after that too.
+The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) merged as `802d96b8`, so the `brace-expansion`, `source-map-js`, `postcss-selector-parser` and `glob` rows are resolved on `main` too. The `@vitest/mocker` and `minimatch` rows stay open on `main` until the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) merges. The `zod` row stays open after that.
 
 **Planned order (status: planning only).** Each step will be its own bounded PR, re-measured before it starts:
 1. the React Router patch set (merged 2026-11-23 as `ae201aff`; see [React Router patch set](#react-router-patch-set--7186));
-2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (Draft pull request opened 2026-11-23; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
-3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy;
+2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (merged 2026-11-23 as `802d96b8`; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
+3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy (Draft pull request opened 2026-11-23; see [Test and lint toolchain patch set](#test-and-lint-toolchain-patch-set));
 4. a separate Zod 4 migration, which needs application changes.
 
 The 18 open CodeQL alerts are outside this document; see [Purpose and authority](#purpose-and-authority).
@@ -622,7 +754,7 @@ On 2026-11-23 both `npm audit` and `npm audit --omit=dev` exit **nonzero** becau
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation, the merged [React Router patch set](#react-router-patch-set--7186) and the proposed [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation, the merged [React Router](#react-router-patch-set--7186) and [CSS and build-toolchain](#css-and-build-toolchain-patch-set) patch sets and the proposed [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
