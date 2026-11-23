@@ -33,6 +33,64 @@ const matchModeSchema = z.enum(["any", "all"]);
 export const PRESET_NAME_MAX_LENGTH = 80;
 
 /**
+ * Most entries one selection array may hold: `selectedKeywords`,
+ * `selectedProjectIds` and `selectedTagIds`, in every payload version that has
+ * them. The same cap applies on read and on save.
+ *
+ * Why 1000 (PAPERLUME-SECURITY-ZOD-4-MIGRATION-001):
+ *  • Keywords filter with AND semantics (`filter_papers_by_keywords`: a paper
+ *    must carry every selected keyword), so a selection longer than the term
+ *    list of a single paper can never match. Those lists run to tens of terms.
+ *  • Project and tag IDs can only name the user's own projects and tags, and
+ *    the dashboard adds them one click at a time. Nothing caps how many a user
+ *    owns, but 1000 hand-picked selections in one category is far beyond any
+ *    real library.
+ *  • Nothing server-side bounds the JSONB `payload`, so this is the only limit.
+ *
+ * A stored row over the cap takes the existing invalid-row path: it is dropped
+ * from the menu with a console warning, and the row is never truncated or
+ * rewritten. `savePreset` / `updatePreset` refuse an over-cap payload up front,
+ * so the app cannot write a preset that it would then refuse to load.
+ */
+export const PRESET_MAX_SELECTIONS = 1000;
+
+/** The selection arrays a payload of any version may carry. */
+const PRESET_SELECTION_FIELDS = ["selectedKeywords", "selectedProjectIds", "selectedTagIds"] as const;
+
+/** One selection array, bounded. Shared by the v1, v2 and v3 schemas. */
+const selectionArraySchema = z.array(z.string()).max(PRESET_MAX_SELECTIONS);
+
+/**
+ * Bound check that runs before any schema parse. It reads only the `length` of
+ * the three known selection fields, so an oversized array is rejected in
+ * constant time: no element is visited, nothing is copied, and the input is
+ * not mutated. Returns the first over-cap field, or `null` when every present
+ * selection array is within `PRESET_MAX_SELECTIONS`. Missing fields and
+ * non-arrays are left to the schemas, which reject them as before.
+ *
+ * Zod 4.6.6+ also checks `.max()` before walking an array's elements, but this
+ * guard does not depend on the library: it keeps every schema attempt (v3, then
+ * v2, then v1) away from an oversized input, and the save path reuses it.
+ */
+export function findOversizedPresetSelection(
+  raw: unknown,
+): { field: (typeof PRESET_SELECTION_FIELDS)[number]; length: number } | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  for (const field of PRESET_SELECTION_FIELDS) {
+    const value: unknown = (raw as Record<string, unknown>)[field];
+    if (Array.isArray(value) && value.length > PRESET_MAX_SELECTIONS) {
+      return { field, length: value.length };
+    }
+  }
+  return null;
+}
+
+/** Toast copy for a save or update refused by the selection cap. */
+const PRESET_SELECTION_LIMIT_MESSAGE =
+  `A saved preset can hold at most ${PRESET_MAX_SELECTIONS} keywords, projects or tags per filter. ` +
+  "Remove some selections and try again.";
+
+/**
  * The 8 filter fields we snapshot, plus a `version` sentinel. Saved verbatim:
  * `searchQuery` keeps its raw form including surrounding double-quotes, so
  * restoring `"muscle protein synthesis"` reproduces the exact quoted query
@@ -51,9 +109,9 @@ export const presetPayloadSchema = z.object({
   yearTo: z.string(),
   studyType: z.string(),
   notesPresence: notesPresenceSchema,
-  selectedKeywords: z.array(z.string()),
-  selectedProjectIds: z.array(z.string()),
-  selectedTagIds: z.array(z.string()),
+  selectedKeywords: selectionArraySchema,
+  selectedProjectIds: selectionArraySchema,
+  selectedTagIds: selectionArraySchema,
   // Any/All match mode per category. Parsed strictly via an enum so a corrupted
   // value (hand-edited JSONB, a buggy writer) fails the schema and the row is
   // dropped rather than silently accepting an arbitrary string into state.
@@ -78,7 +136,7 @@ export const presetPayloadV1Schema = z.object({
   yearTo: z.string(),
   studyType: z.string(),
   notesPresence: notesPresenceSchema,
-  selectedKeywords: z.array(z.string()),
+  selectedKeywords: selectionArraySchema,
   selectedProjectId: z.string().nullable(),
   selectedTagId: z.string().nullable(),
 });
@@ -96,9 +154,9 @@ export const presetPayloadV2Schema = z.object({
   yearTo: z.string(),
   studyType: z.string(),
   notesPresence: notesPresenceSchema,
-  selectedKeywords: z.array(z.string()),
-  selectedProjectIds: z.array(z.string()),
-  selectedTagIds: z.array(z.string()),
+  selectedKeywords: selectionArraySchema,
+  selectedProjectIds: selectionArraySchema,
+  selectedTagIds: selectionArraySchema,
 });
 
 /** Normalize a nullable scalar ID into a 0-or-1-element array. */
@@ -135,8 +193,26 @@ export interface FilterPreset {
  *    0-or-1-element arrays and both modes = `"any"`.
  * Defaulting to `"any"` reproduces exactly the OR-within semantics those
  * presets had when they were saved, before match modes existed.
+ *
+ * Size bound: a selection array over `PRESET_MAX_SELECTIONS` is rejected by
+ * `findOversizedPresetSelection` before any schema runs, and the row takes the
+ * same drop-and-warn path as any other invalid row. Nothing is truncated.
  */
 export function parsePresetPayload(raw: unknown): PresetPayload | null {
+  const oversized = findOversizedPresetSelection(raw);
+  if (oversized) {
+    // Deliberately not a throw, and the array itself is never logged.
+    console.warn("[useFilterPresets] Dropping invalid preset payload:", [
+      {
+        code: "too_big",
+        path: [oversized.field],
+        maximum: PRESET_MAX_SELECTIONS,
+        length: oversized.length,
+      },
+    ]);
+    return null;
+  }
+
   const parsed = presetPayloadSchema.safeParse(raw);
   if (parsed.success) {
     return {
@@ -574,9 +650,20 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
    * server-assigned id) on success or `null` on error. Returning the row lets
    * the caller mark the new preset as "currently loaded" so the user can
    * immediately tweak filters and click Update without an extra Load step.
+   *
+   * A payload over the selection cap is refused before the network, because
+   * the read path would drop it: saving it would make the preset vanish.
    */
   const savePreset = useCallback(
     async (name: string, payload: PresetPayload): Promise<FilterPreset | null> => {
+      if (findOversizedPresetSelection(payload)) {
+        toast({
+          title: "Could not save preset",
+          description: PRESET_SELECTION_LIMIT_MESSAGE,
+          variant: "destructive",
+        });
+        return null;
+      }
       try {
         const created = await createPresetMutation.mutateAsync({ name, payload });
         toast({ title: "Preset saved", description: `"${name}" is now in your saved searches.` });
@@ -611,9 +698,18 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
    * Update an already-loaded preset's payload. Pass the full preset (or at
    * least `id` + `name`) so the success toast can name the preset and so the
    * mutation cannot accidentally target a different row by name lookup.
+   * An over-cap payload is refused before the network, as in `savePreset`.
    */
   const updatePreset = useCallback(
     async (preset: Pick<FilterPreset, "id" | "name">, payload: PresetPayload): Promise<boolean> => {
+      if (findOversizedPresetSelection(payload)) {
+        toast({
+          title: "Could not update preset",
+          description: PRESET_SELECTION_LIMIT_MESSAGE,
+          variant: "destructive",
+        });
+        return false;
+      }
       try {
         await updatePresetMutation.mutateAsync({ id: preset.id, name: preset.name, payload });
         return true;
@@ -621,7 +717,7 @@ export function useFilterPresets({ userId }: UseFilterPresetsArgs) {
         return false;
       }
     },
-    [updatePresetMutation],
+    [updatePresetMutation, toast],
   );
 
   /**
