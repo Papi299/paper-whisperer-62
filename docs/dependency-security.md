@@ -22,6 +22,10 @@
 
 GitHub's Dependabot reported **15 open alerts** on `main` `dee28f4d` on 2026-11-23. Alerts 9–13 are the five indexed Vite advisories that the Vite remediation also moves past. GitHub closes alerts only after a change reaches `main`, so confirm their state there. The critical Vite advisory itself reached neither Dependabot nor `npm audit`: on 2026-11-23 it was published in the Vite repository but not in GitHub's Advisory Database.
 
+**After the Vite remediation merged (2026-11-23).** On `main` `626f794f`, Dependabot showed **11 open alerts**. Alerts 9–13 closed as fixed. The same rescan opened alert **20**, for `minimatch` [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) (moderate). That advisory had been in GitHub's database since 2026-10-30 and `npm audit` already counted it. Dependabot had simply not evaluated this lockfile until the merge changed it. `npm audit` on `main` `626f794f` matched the Vite-remediation column above. The 18 CodeQL alerts were unchanged.
+
+**With the [React Router patch set](#react-router-patch-set--7186) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `3d0accdd…`) measures the same as `main` `626f794f`: **16** full (3 high / 13 moderate) and **7** production (3 high / 4 moderate), with the same packages and the same advisories. The eight advisories the patch set addresses are published only in the packages' own repositories, not in GitHub's Advisory Database, so they move neither `npm audit` nor Dependabot.
+
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
 The previously recorded `nanoid` high remains **remediated** by a lockfile-only in-range resolution — see [NanoID finding](#nanoid-finding--remediated).
@@ -51,7 +55,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test. It is not complete until its pull request merges.
 
 ## Current resolved security baseline
 
@@ -60,12 +64,13 @@ These resolutions must not regress. A change that moves any of them backwards re
 | Cluster | Packages |
 |---|---|
 | 1 | `vite` 7.3.6 — **superseded by 7.3.8** ([Vite development-server RCE](#vite-development-server-rce--remediated)) · `vitest` 3.2.7 — **superseded by 4.1.11** ([Vitest 4 upgrade](#vitest-residual--remediated-by-a-major-upgrade)) · `postcss` 8.5.26 |
-| 2 | `lodash` 4.18.1 · `ws` 8.21.3 · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
+| 2 | `lodash` 4.18.1 · `ws` 8.21.3 — **superseded by 8.23.0** in the [React Router patch set](#react-router-patch-set--7186) · `yaml` 2.9.0 · `picomatch` 4.0.5 (nested v2 line 2.3.2) · `brace-expansion` 1.1.18 (nested v2 line 2.1.4) |
 | 3 | `js-yaml` 4.3.1 — **superseded by 4.3.2** (remediation 002) · `flatted` 3.4.4 · `form-data` 4.0.6 · `@tootallnate/once` 2.0.1 · `esbuild` 0.28.1 |
-| 5 | `react-router` **7.18.2** (declared `^7.18.2`) · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 |
+| 5 | `react-router` **7.18.2** (declared `^7.18.2`) — **superseded by 7.18.6** · `cookie` 1.1.1 · `set-cookie-parser` 2.7.2 — **superseded by 2.7.3**, both in the [React Router patch set](#react-router-patch-set--7186) |
 | Remediation 002 | `browserslist` **4.29.0** · `js-yaml` **4.3.2** · `@humanfs/node` **0.16.8** · `postcss-selector-parser` **6.1.4** (hoisted line; the nested exact-pinned 6.0.10 is outside the affected range) |
 | Vitest 4 upgrade | `vitest` **4.1.11** (declared `^4.1.11`) · `@vitest/mocker` **4.1.11** · the `@vitest/*` 4.1.11 siblings · `chai` **6.2.2** |
 | Vite dev-server RCE | `vite` **7.3.8** (declared `^7.3.1`) |
+| React Router patch set (this change; on `main` only once its pull request merges) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -114,6 +119,104 @@ Vite 7.3.x bundles its own copy of `postcss-selector-parser` **7.1.0** inside `v
 
 Reassess when a Vite 7.x release bundles `postcss-selector-parser` 7.1.8 or later, or if CSS Modules are adopted.
 
+## React Router patch set — 7.18.6
+
+**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-REACT-ROUTER-PATCH-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges, and Production only after the deployment the merge triggers. On 2026-11-23, `main` `626f794f` and Production `dpl_H5t62SH3` still resolved and served `react-router` 7.18.2, `set-cookie-parser` 2.7.2 and `ws` 8.21.3.
+
+Eight advisories cover those versions. Each package's own repository has published its advisories, but on 2026-11-23 none of them was in GitHub's Advisory Database. None therefore produced a Dependabot alert or an `npm audit` finding.
+
+| Advisory | Package | Severity (upstream) | Affected | Fixed in | Affected modes | Applies to PaperLume |
+|---|---|---|---|---|---|---|
+| [GHSA-x8j4-g9rr-8j87](https://github.com/remix-run/react-router/security/advisories/GHSA-x8j4-g9rr-8j87): DoS in route matching | `react-router` | High | `>=6.0.0 <7.18.3` | 7.18.3 | Declarative, Data, Framework, RSC | **Yes.** Route matching runs in the browser |
+| [GHSA-qhgm-jj2j-75wj](https://github.com/remix-run/react-router/security/advisories/GHSA-qhgm-jj2j-75wj): prototype pollution in data deserialization | `react-router` | High | `>=7.0.0 <7.18.5` | 7.18.5 | Framework | No |
+| [GHSA-2rq8-3rm6-2w8f](https://github.com/remix-run/react-router/security/advisories/GHSA-2rq8-3rm6-2w8f): DoS in server-side route discovery | `react-router` | High | `>=7.0.0 <7.18.5` | 7.18.5 | Framework (SSR with lazy route discovery), RSC | No |
+| [GHSA-8wpx-2pj4-ggvx](https://github.com/remix-run/react-router/security/advisories/GHSA-8wpx-2pj4-ggvx): CSRF bypass in server-side actions | `react-router` | Moderate | `>=7.12.0 <7.18.3` | 7.18.3 | Framework, RSC | No |
+| [GHSA-7m2v-44vx-v55w](https://github.com/remix-run/react-router/security/advisories/GHSA-7m2v-44vx-v55w): open redirect in loader and action responses | `react-router` | Moderate | `>=6.4.0 <7.18.3` | 7.18.3 | Data, Framework, RSC | No |
+| [GHSA-mjj8-rxh9-q8f5](https://github.com/remix-run/react-router/security/advisories/GHSA-mjj8-rxh9-q8f5): XSS in RSC redirects | `react-router` | Moderate | `>=7.11.0 <7.18.4` | 7.18.4 | RSC | No |
+| [GHSA-mxfr-qhmh-pcx4](https://github.com/nfriedly/set-cookie-parser/security/advisories/GHSA-mxfr-qhmh-pcx4): prototype pollution through `name=`/`value=` attributes | `set-cookie-parser` | High | `<=2.7.2`, `3.0.0–3.1.4` | 2.7.3, 3.2.0 | n/a | No. Not in any shipped code (below) |
+| [GHSA-37g9-w4hg-h9qr](https://github.com/websockets/ws/security/advisories/GHSA-37g9-w4hg-h9qr): memory exhaustion through automatic pong replies | `ws` | High | `>=8.0.0 <8.23.0`, and older lines | 8.23.0 | n/a | No. Never loaded by the app (below) |
+
+### Where each package runs
+
+- **`react-router`** ships in the web bundle. PaperLume uses declarative mode only: one `BrowserRouter` with `Routes` and `Route` in `src/App.tsx`. It has no data router, loaders, actions, SSR, framework mode or RSC, so only GHSA-x8j4 applies.
+  - Its impact is CPU use in the visitor's own tab. A crafted URL, such as a long run of slashes followed by another character, made route matching quadratic.
+  - A bounded local reproduction used `matchRoutes` with PaperLume's route table. With 7.18.2 it took 7.6 ms, 93.6 ms and 1,492 ms at 2,000, 8,000 and 32,000 characters; with 7.18.6 it took 0.8 ms, 0.6 ms and 2.3 ms. Every ordinary path resolved to the same route on both versions.
+  - No denial-of-service input was sent to Production or to a Preview.
+- **`set-cookie-parser`** is a dependency of `react-router` itself. The only code that uses it is `prependCookies`, the server-side step that merges parent routes' `Set-Cookie` headers. No application or test code reaches that path. Neither the web bundle nor the extension contains it, before or after this change. The update keeps a vulnerable version out of the installed graph; it changes nothing that runs.
+- **`ws`**, the `package-lock.json` copy, never reaches a browser.
+  - `@supabase/realtime-js` 2.93.3 declares it but never imports it. It uses the platform's native `WebSocket`, and names `ws` only in an error message for Node versions before 22.
+  - The only module that loads this copy is jsdom's `WebSocket` implementation, in Vitest, which opens client connections only.
+  - The advisory needs a peer that floods pings while not reading. No server in this repository runs on this copy, and the Edge Functions run on Deno without this lockfile.
+  - Vite's development server runs its **own bundled** `ws`, which this change cannot move; see [Residual: Vite's bundled `ws`](#residual-vites-bundled-ws).
+
+### Why 7.18.6
+
+7.18.5 fixes all six `react-router` advisories. 7.18.6 (2026-11-18) is the newest 7.x release, published under the `version-7` dist-tag. The [remediation policy](#remediation-policy) prefers the newest safe version the range permits over the bare patched floor.
+- 7.18.6 also hardens URL validation for links, form actions, `href()`, `generatePath()` and redirects.
+- GHSA-mp5r-736v-j8x9, also fixed in 7.18.6, concerns `@react-router/node`, `@react-router/serve` and `@react-router/dev`. None of them is installed.
+- v8 stays out of scope, as recorded under [Why not v8](#why-not-v8).
+- `set-cookie-parser` 2.7.3 is the 2.x backport (the `backports` dist-tag). 3.x and 4.x fall outside `react-router`'s `^2.6.0` range.
+- `ws` 8.23.0 is the `latest` dist-tag.
+
+### Remediation applied
+
+- `npm update react-router set-cookie-parser ws --package-lock-only`. The dependency delta is three `package-lock.json` entries (`react-router`, `set-cookie-parser` and `ws`), and only their `version`, `resolved` and `integrity` fields. Each new release declares the same dependencies, peers and engines as the one it replaces, so no other entry moved. There are 561 entries before and after, with none added or removed.
+- `package.json` was **not** modified.
+  - `"react-router": "^7.18.2"` already permits 7.18.6.
+  - The transitive ranges permit the other two: `^2.6.0` from `react-router`, and `^8.18.2` from `@supabase/realtime-js` and `^8.11.0` from jsdom.
+  - No `overrides` entry was added, and `npm audit fix` was not run.
+- `npm ci` leaves the lockfile unchanged, and `npm ls --all` exits 0. Each package resolves to a single copy, and every other resolution in the [baseline](#current-resolved-security-baseline) is unchanged.
+- The patch adds one regression test, `src/__tests__/App.routes.test.tsx`; see [Browser behaviour](#browser-behaviour).
+
+### Browser behaviour
+
+Between 7.18.2 and 7.18.6, the browser-visible changes are:
+- Route matching strips trailing slashes with a linear scan instead of two backtracking regular expressions. This is the GHSA-x8j4 fix, and the resolved route is unchanged.
+- Since 7.18.3, `useNavigate()` and `<Navigate>` throw "External navigation is not allowed" for a target that resolves to another origin.
+- Since 7.18.6, `<Link>` throws during render for an absolute URL that is not written out explicitly.
+- `resolvePath` treats a leading backslash as absolute.
+
+None of PaperLume's navigation targets can trigger those throws, and no route guard, redirect, authentication or session code changed.
+- Every `<Link>` target is a literal internal path: `/`, `/dashboard` or `/privacy`.
+- Every `navigate()` target is either a literal (`/`, `/auth`, `/dashboard`, `/privacy`) or a path the application builds itself:
+  - `/auth?returnTo=…`, from `buildAuthPathWithReturnTo`;
+  - the post-sign-in path from `parseSafeReturnTo`. It accepts only a rebuilt `/extension-import?…` path and otherwise falls back to `/`.
+
+Before this change, no test exercised the route table. `src/__tests__/App.routes.test.tsx` now pins it under the real `BrowserRouter`:
+- direct loads of every route, with and without a trailing slash;
+- unknown and malformed paths rendering `NotFound` in place;
+- `<Link>` navigation replayed with Back and Forward.
+
+The test passes 13 of 13 against both 7.18.2 and 7.18.6, so it records existing behaviour.
+
+### Build effect
+
+Both sides were built from clean installs with CI's placeholder environment: base `main` `626f794f`, head the lockfile commit `3641b746`.
+- **Web (`dist/`).** 7 of 9 files are byte-identical, including the stylesheet. The entry chunk grows from 1,951,890 B to 1,953,050 B: +1,160 B, and gzip 552.47 → 552.87 kB. `index.html` differs only in the entry chunk's name.
+- **Extension (`dist-extension/`).** All 8 files are byte-identical. The extension does not bundle `react-router`.
+- **The change is all `react-router` code.**
+  - The unminified entry chunks differ in 12 hunks, all inside `react-router`.
+  - Once the minifier's identifier renaming is normalized, the only differing region maps to `react-router`'s dist module, which grows by 1,148 B. The other 12 B are renaming.
+- **Nothing else moved.**
+  - Neither side bundles `set-cookie-parser`, `cookie` or `ws`.
+  - The Supabase URL and key placeholders, the inlined environment keys and the route strings are identical, as are the counts of `.rpc(` and `.from("` calls.
+
+### Residual: Vite's bundled `ws`
+
+Vite 7.3.8 bundles its own copy of `ws` **8.18.3** inside `vite/dist`, and uses it for the development server's hot-reload WebSocket. Scanners cannot see it, because it has no `package-lock.json` entry, and this change does not move it.
+- **Advisories.** That copy lies inside three `ws` advisories:
+  - GHSA-37g9-w4hg-h9qr above, fixed in 8.23.0;
+  - [GHSA-96hv-2xvq-fx4p](https://github.com/websockets/ws/security/advisories/GHSA-96hv-2xvq-fx4p), memory exhaustion from tiny fragments, fixed in 8.21.0;
+  - [GHSA-58qx-3vcg-4xpx](https://github.com/websockets/ws/security/advisories/GHSA-58qx-3vcg-4xpx), uninitialized memory disclosed when a typed array is passed as the `close()` reason, fixed in 8.20.1. Whether Vite's server code ever does that was not assessed.
+- **Exposure.** The two memory-exhaustion advisories need a peer that can reach the development server. `server.host: "::"` makes `npm run dev` reachable from the network, as described under [Exposure](#exposure-the-development-server-not-production). The impact is a crashed development server. Production does not run it.
+- **No fix on 7.3.x.** On 2026-11-23, 7.3.8 was the newest Vite 7.3.x release.
+
+Reassess when a Vite 7.x release bundles `ws` 8.23.0 or later, or as part of a Vite major upgrade.
+
+### What remains
+
+This change leaves every other [open finding](#open-findings-2026-11-23) as it was. `npm audit` still measures 16 full and 7 production, Dependabot still shows 11 open alerts on `main`, and CodeQL still shows 18. Vite's bundled `ws` and `postcss-selector-parser` copies also remain, as described in their residual notes. Classifying the CodeQL alerts remains a separate track (**status: planning only**).
+
 ## Open findings (2026-11-23)
 
 Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is published in the package's own repository but, on 2026-11-23, not in GitHub's Advisory Database. Neither Dependabot nor `npm audit` reports those.
@@ -126,13 +229,15 @@ Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is pub
 | `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6 | **web bundle** |
 | `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6 | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
 | `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate) | installed under `sucrase`; only `sucrase`'s CLI loads it |
-| `minimatch` | 9.0.9 (two copies) | — | GHSA-g3hv-75wg-m249 (moderate; `npm audit` reports it, Dependabot has no alert); upstream-only GHSA-c859-jr93-m5j4 (moderate) | lint and build tooling |
-| `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5 | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
-| `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3 | a `react-router` dependency; not in the shipped bundle |
-| `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0 | Node only: jsdom in tests, and `@supabase/realtime-js` outside the browser |
+| `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate) | lint and build tooling |
+| `react-router` | 7.18.2 | — | upstream-only GHSA-x8j4-g9rr-8j87, GHSA-qhgm-jj2j-75wj and GHSA-2rq8-3rm6-2w8f (high); GHSA-7m2v-44vx-v55w, GHSA-8wpx-2pj4-ggvx and GHSA-mjj8-rxh9-q8f5 (moderate); all six fixed by 7.18.5. 7.18.6 in the [React Router patch set](#react-router-patch-set--7186) | **web bundle**. Only GHSA-x8j4 (CPU use in route matching) applies to the declarative SPA; the others need data, framework or RSC modes |
+| `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 in the [React Router patch set](#react-router-patch-set--7186) | a `react-router` dependency; not in any shipped bundle |
+| `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 in the [React Router patch set](#react-router-patch-set--7186) | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
+
+The last three rows stay open on `main` until the React Router patch set merges.
 
 **Planned order (status: planning only).** Each step will be its own bounded PR, re-measured before it starts:
-1. the React Router patch set;
+1. the React Router patch set (Draft pull request opened 2026-11-23; see [React Router patch set](#react-router-patch-set--7186));
 2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography`;
 3. the test and lint toolchain: `vitest` and `typescript-eslint`;
 4. a separate Zod 4 migration, which needs application changes.
@@ -343,6 +448,18 @@ Paperlume uses React Router in **declarative mode only**: a single `BrowserRoute
 
 This profile is what kept the migration to import provenance, and it is the thing to re-check if a future change adopts a data router, introduces SSR, or makes a navigation target depend on user input.
 
+**Re-checked 2026-11-23 (React Router patch set).** The profile above describes Cluster 5. Since then it has changed in two ways, both still within declarative mode:
+- **`<Link>` is now rendered in four places**, always with a literal internal target:
+  - `/privacy`, from the account menu and from the auth page footer;
+  - `/`, from the Privacy page header;
+  - `/dashboard`, twice on the extension-import page.
+- **There are now eight `navigate()` call sites, in six components.**
+  - Most targets are literals: `/`, `/auth`, `/dashboard` and `/privacy`.
+  - Two are paths the application builds itself: `/auth?returnTo=…` for the extension handoff, and the post-sign-in target from `parseSafeReturnTo`.
+  - `parseSafeReturnTo` rebuilds an `/extension-import?…` path from validated fields, and otherwise falls back to `/`. Anyone can put a value in the `returnTo` query parameter, so the path is rebuilt rather than echoed.
+
+There is still no data router, no loader or action, no `<Navigate>`, and no SSR or hydration. [Browser behaviour](#browser-behaviour) covers how 7.18.6's navigation-target validation meets these call sites.
+
 ## Remediation policy
 
 The approach established across Clusters 1–3, to be followed by future dependency work:
@@ -354,7 +471,7 @@ The approach established across Clusters 1–3, to be followed by future depende
 - **Never `npm audit fix --force`.** Never hand-edit generated lockfile version/resolved/integrity fields, and never add an `overrides` entry merely to silence a finding.
 - **Major-version upgrades are separate bounded work**, especially when they require application source changes.
 - **Verify reproducibility**: `npm ci` must succeed against the committed lockfile without mutating it.
-- **Keep CI green**: the required `Validate` gate plus the non-required `E2E (local)` and `DB Tests` workflows must pass on the exact head. Dependency PRs carry no migration and perform no Supabase mutation.
+- **Keep CI green**: the required `Validate` and `DB Tests` gates, plus the non-required `E2E (local)` and `Extension` workflows, must pass on the exact head. `DB Tests` has been a required check since 2026-08-16 (decision D5 in [decisions-and-triggers.md](decisions-and-triggers.md)). Dependency PRs carry no migration and perform no Supabase mutation.
 
 ## Verification commands
 
@@ -371,11 +488,11 @@ On 2026-11-23 both `npm audit` and `npm audit --omit=dev` exit **nonzero** becau
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger and the React Router trigger had all fired. Apart from the Vite remediation, the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation and the proposed [React Router patch set](#react-router-patch-set--7186), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
-- a **new React Router advisory** is published, particularly one whose affected range reaches **7.18.2** — that would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
+- a **new React Router advisory** is published, particularly one whose affected range reaches the installed version: **7.18.2**, or **7.18.6** with the [React Router patch set](#react-router-patch-set--7186). That would move the floor again and require re-measuring the v7 line (and re-examining whether v8, still out of scope today, has become necessary);
 - Paperlume's Router usage changes in a way that alters the exposure profile — a navigation target stops being a hardcoded literal, `<Link>`/`<NavLink>` starts being rendered, a data router is adopted, or SSR/hydration is introduced;
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
