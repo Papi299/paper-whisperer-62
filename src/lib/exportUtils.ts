@@ -213,13 +213,38 @@ export function exportToRIS(papers: PaperWithTags[]): void {
 // the next field or entry.
 
 /**
- * A `doi` or `url` line, or the PaperLume field that replaces it for a value
- * the standard field cannot hold. Field names are padded as before, so an
- * ordinary record is written byte for byte as it always was.
+ * What one `exportToBibTeX` call wrote to its file, for the notice the export
+ * shows. Every count is taken from the fields that were written, as
+ * `writeIdentifierField` named them, so the summary cannot disagree with the
+ * download: an identifier the file does not contain, such as a stored
+ * `journal_url` passed over for a PubMed or DOI link, is never counted.
  */
-function bibtexIdentifierLine(field: IdentifierField, value: string): string {
+export interface BibTeXExportSummary {
+  /** Papers in the file, one entry each. */
+  paperCount: number;
+  /** Papers with a DOI or URL, or both, in a PaperLume field, each counted once. */
+  affectedPaperCount: number;
+  /** `paperlume-doi-v1` fields in the file. */
+  exceptionalDoiCount: number;
+  /** `paperlume-url-v1` fields in the file. */
+  exceptionalUrlCount: number;
+}
+
+/**
+ * A `doi` or `url` line, or the PaperLume field that replaces it for a value
+ * the standard field cannot hold, and which of the two it is. Field names are
+ * padded as before, so an ordinary record is written byte for byte as it
+ * always was.
+ */
+function bibtexIdentifierLine(
+  field: IdentifierField,
+  value: string,
+): { line: string; inPaperLumeField: boolean } {
   const written = writeIdentifierField(field, value);
-  return `  ${written.name.padEnd(9)} = {${written.value}}`;
+  return {
+    line: `  ${written.name.padEnd(9)} = {${written.value}}`,
+    inPaperLumeField: written.name !== field,
+  };
 }
 
 /**
@@ -307,12 +332,22 @@ function generateCiteKey(
   return fallback;
 }
 
-export function exportToBibTeX(papers: PaperWithTags[]): void {
+/**
+ * Writes `papers` as one BibTeX file, downloads it, and returns what the file
+ * holds (see `BibTeXExportSummary`). The summary is returned only once the
+ * download has been handed to the browser, so a caller never announces a file
+ * that was not produced.
+ */
+export function exportToBibTeX(papers: PaperWithTags[]): BibTeXExportSummary {
   const usedKeys = new Set<string>();
+  let affectedPaperCount = 0;
+  let exceptionalDoiCount = 0;
+  let exceptionalUrlCount = 0;
 
   const entries = papers.map((p) => {
     const key = generateCiteKey(p, usedKeys);
     const fields: string[] = [];
+    let affected = false;
 
     // Title — wrap in double braces to preserve capitalisation
     fields.push(`  title     = {{${encodeBibTeXText(p.title)}}}`);
@@ -338,7 +373,12 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
 
     // DOI — the DOI name, raw (see `writeIdentifierField`)
     if (p.doi) {
-      fields.push(bibtexIdentifierLine("doi", p.doi));
+      const doi = bibtexIdentifierLine("doi", p.doi);
+      fields.push(doi.line);
+      if (doi.inPaperLumeField) {
+        exceptionalDoiCount++;
+        affected = true;
+      }
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
@@ -347,10 +387,16 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  pmid      = {${pmid}}`);
     }
 
-    // URL — raw, as `exportUrlFor` produced it (see `writeIdentifierField`)
+    // URL — raw, as `exportUrlFor` produced it (see `writeIdentifierField`).
+    // Only this URL is written, so only this URL is counted.
     const url = exportUrlFor(p);
     if (url) {
-      fields.push(bibtexIdentifierLine("url", url));
+      const written = bibtexIdentifierLine("url", url);
+      fields.push(written.line);
+      if (written.inPaperLumeField) {
+        exceptionalUrlCount++;
+        affected = true;
+      }
     }
 
     // Abstract
@@ -374,11 +420,13 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  note      = {Study type: ${encodeBibTeXText(p.study_type)}}`);
     }
 
+    if (affected) affectedPaperCount++;
     return `@article{${key},\n${fields.join(",\n")}\n}`;
   });
 
   const bibtex = entries.join("\n\n");
   downloadFile(bibtex, "citations.bib", "application/x-bibtex;charset=utf-8;");
+  return { paperCount: entries.length, affectedPaperCount, exceptionalDoiCount, exceptionalUrlCount };
 }
 
 // ── Shared ──

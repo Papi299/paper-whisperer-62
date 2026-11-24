@@ -604,6 +604,147 @@ describe("a DOI or URL another tool wrote is read as written", () => {
 
 // ── Year and citation key ──
 
+// ── What the export reports ──
+
+describe("the export summary counts what the file holds", () => {
+  /** The PaperLume fields of each entry, as the structural oracle reads the file. */
+  const paperLumeFields = (file: string): string[][] =>
+    bibtexEntries(file).map((entry) => fieldNames(entry).filter((name) => name.startsWith("paperlume-")));
+
+  it("counts nothing in an export whose DOIs and URLs are all written raw", async () => {
+    const summary = exportToBibTeX([
+      makePaper({ doi: "10.1000/456#789" }),
+      makePaper({ doi: `10.1000/a${LB}b` }),
+      makePaper({ doi: null, journal_url: "https://journal.example.com/article?id=7#s{2}" }),
+      sentinel(),
+    ]);
+
+    expect(summary).toEqual({ paperCount: 4, affectedPaperCount: 0, exceptionalDoiCount: 0, exceptionalUrlCount: 0 });
+    expect(await exported()).not.toContain("paperlume-");
+  });
+
+  it("counts one DOI written to its PaperLume field", async () => {
+    const summary = exportToBibTeX([makePaper({ doi: "10.1000/x}" })]);
+
+    expect(summary).toEqual({ paperCount: 1, affectedPaperCount: 1, exceptionalDoiCount: 1, exceptionalUrlCount: 0 });
+    expect(paperLumeFields(await exported())).toEqual([["paperlume-doi-v1"]]);
+  });
+
+  it("counts one URL written to its PaperLume field", async () => {
+    const summary = exportToBibTeX([makePaper({ doi: null, journal_url: "https://example.com/search?q={" })]);
+
+    expect(summary).toEqual({ paperCount: 1, affectedPaperCount: 1, exceptionalDoiCount: 0, exceptionalUrlCount: 1 });
+    expect(paperLumeFields(await exported())).toEqual([["paperlume-url-v1"]]);
+  });
+
+  it("counts a paper whose DOI and URL both moved once, and each of its fields", async () => {
+    // A DOI with no prefix/suffix separator forms no resolver URL, so the
+    // stored link is the URL written, and neither value can be written raw.
+    const summary = exportToBibTeX([makePaper({ doi: "10.1000{x", journal_url: "https://example.com/?q=}" })]);
+
+    expect(summary).toEqual({ paperCount: 1, affectedPaperCount: 1, exceptionalDoiCount: 1, exceptionalUrlCount: 1 });
+    expect(paperLumeFields(await exported())).toEqual([["paperlume-doi-v1", "paperlume-url-v1"]]);
+  });
+
+  it("counts papers and fields across affected and unaffected papers", async () => {
+    const summary = exportToBibTeX([
+      makePaper({ id: "m1", title: "Ordinary" }),
+      makePaper({ id: "m2", title: "Enclosed DOI", doi: "{10.1000/y}" }),
+      makePaper({ id: "m3", title: "Link", doi: null, journal_url: `https://example.com/a?q=${BS}}` }),
+      makePaper({ id: "m4", title: "Both", doi: "10.1000{x", journal_url: "https://example.com/?q={" }),
+      makePaper({ id: "m5", title: "DOI beside a PMID", doi: "10.1000/}{", pmid: "12345678" }),
+      makePaper({ id: "m6", title: "No identifiers", doi: null }),
+      sentinel(),
+    ]);
+
+    expect(summary).toEqual({ paperCount: 7, affectedPaperCount: 4, exceptionalDoiCount: 3, exceptionalUrlCount: 2 });
+    expect(paperLumeFields(await exported())).toEqual([
+      [],
+      ["paperlume-doi-v1"],
+      ["paperlume-url-v1"],
+      ["paperlume-doi-v1", "paperlume-url-v1"],
+      ["paperlume-doi-v1"],
+      [],
+      [],
+    ]);
+  });
+
+  it("counts only the URL the file holds, never a stored link passed over", async () => {
+    const link = "https://example.com/?q={";
+    const summary = exportToBibTeX([
+      makePaper({ id: "u1", pmid: "12345678", doi: null, journal_url: link }),
+      makePaper({ id: "u2", doi: null, pubmed_url: "https://pubmed.ncbi.nlm.nih.gov/7654321/", journal_url: link }),
+      makePaper({ id: "u3", doi: "10.1000/ok", journal_url: link }),
+      makePaper({ id: "u4", pmid: "L629384756", doi: null, journal_url: link }),
+    ]);
+    const file = await exported();
+
+    expect(summary).toEqual({ paperCount: 4, affectedPaperCount: 1, exceptionalDoiCount: 0, exceptionalUrlCount: 1 });
+    expect(paperLumeFields(file)).toEqual([[], [], [], ["paperlume-url-v1"]]);
+    expect(file).toContain("url       = {https://pubmed.ncbi.nlm.nih.gov/12345678/}");
+    expect(file).toContain("url       = {https://pubmed.ncbi.nlm.nih.gov/7654321/}");
+    expect(file).toContain("url       = {https://doi.org/10.1000/ok}");
+    expect(file.split("  paperlume-url-v1 = ")).toHaveLength(2);
+  });
+
+  it("agrees with the file for any mix of DOIs, links and PMIDs", async () => {
+    // Deterministic, so a failure reproduces.
+    let seed = 0x5eed;
+    const next = () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const pick = <T,>(values: readonly T[]): T => values[Math.floor(next() * values.length)];
+    const DOIS = [null, "10.1000/ok", "10.1000/x}", "{10.1000/y}", `10.1000/a${LB}b`, "10.1000{x", `10.1000/${BS}`,
+      "10.1000/a{b}c", "10.1000/}{", " 10.1000/z ", "{a}{b}", `{10.1000/${BS}}`] as const;
+    const LINKS = [null, "https://journal.example.com/a?id=1", "https://example.com/?q={", "https://example.com/?q=}#{",
+      `https://example.com/a?q=${BS}}`, "https://example.com/search?q={x}", "javascript:alert(1)"] as const;
+    const PMIDS = [null, "12345678", "L629384756"] as const;
+    const PUBMED_URLS = [null, "https://pubmed.ncbi.nlm.nih.gov/7654321/", "https://evil-pubmed.example/1"] as const;
+
+    const seen = { affectedPaperCount: 0, exceptionalDoiCount: 0, exceptionalUrlCount: 0 };
+    for (let round = 0; round < 40; round++) {
+      const papers = Array.from({ length: 25 }, (_, i) =>
+        makePaper({
+          id: `r${round}-${i}`,
+          doi: pick(DOIS),
+          journal_url: pick(LINKS),
+          pmid: pick(PMIDS),
+          pubmed_url: pick(PUBMED_URLS),
+        }),
+      );
+      const summary = exportToBibTeX(papers);
+      const fields = paperLumeFields(await exported());
+      const count = (name: string) => fields.filter((names) => names.includes(name)).length;
+
+      expect(summary).toEqual({
+        paperCount: fields.length,
+        affectedPaperCount: fields.filter((names) => names.length > 0).length,
+        exceptionalDoiCount: count("paperlume-doi-v1"),
+        exceptionalUrlCount: count("paperlume-url-v1"),
+      });
+      expect(fields).toHaveLength(papers.length);
+      seen.affectedPaperCount += summary.affectedPaperCount;
+      seen.exceptionalDoiCount += summary.exceptionalDoiCount;
+      seen.exceptionalUrlCount += summary.exceptionalUrlCount;
+    }
+    // The mix reached every count, so the agreement above is not vacuous.
+    expect(Object.values(seen).every((total) => total > 0)).toBe(true);
+  });
+
+  it("downloads one file per export, and reports nothing when the download fails", () => {
+    exportToBibTeX([makePaper({ doi: "10.1000/x}" }), sentinel()]);
+    expect(downloads).toHaveLength(1);
+    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);
+
+    URL.createObjectURL = (() => {
+      throw new Error("download blocked");
+    }) as typeof URL.createObjectURL;
+    expect(() => exportToBibTeX([makePaper({ doi: "10.1000/x}" })])).toThrow("download blocked");
+    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the year and the citation key stay inside their boundaries", () => {
   it("writes a numeric year and its key exactly as before", async () => {
     const file = await exportBib([
