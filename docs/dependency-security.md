@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is the [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1, whose fix is proposed in a Draft pull request.
 
 ## Current audit state
 
@@ -42,6 +42,8 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 **With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** Its lockfile (`package-lock.json` SHA-256 `48869379…`) measured **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stayed open until the migration merged. Closing it would leave no open Dependabot alert, but that was a projection, to be re-read after the merge.
 
 **After the Zod 4 migration merged (2026-11-24).** PR #372 merged at 04:43:34 UTC as `cec11199`, and Production `dpl_413PdQNt` was built from it; it was READY at 04:44:02 UTC. On that commit, `npm audit` measured 0 full and 0 production findings, as projected above. Dependabot reported alert 16 fixed at 04:44:17 UTC and opened none, which left **0 open alerts**. CodeQL still showed 18. Re-measured at 07:45 UTC the same day, all of these were unchanged.
+
+**After the CSV export hardening merged (2026-11-24).** PR #373, a first-party change with no dependency delta, merged at 09:40:45 UTC as `a110b4ce` (see [CSV formula injection](#csv-formula-injection-cwe-1236)). Re-measured on that commit at 10:10 UTC: `npm audit` 0 full and 0 production findings after a clean `npm ci`, **0 open Dependabot alerts**, 18 open CodeQL alerts and 0 secret-scanning alerts.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -650,8 +652,8 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
   - All 18 results come from single-file pattern queries. No data-flow query reported anything.
   - The Edge Functions import from `esm.sh`, which CodeQL cannot resolve, so the absence of data-flow results there is weak evidence.
   - The deployed Edge Function bundle was not compared with `main`, and no CodeQL CLI was run locally.
-- **Proposed follow-up repair groups.** Each would be its own bounded PR, and none has started:
-  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15);
+- **Proposed follow-up repair groups.** Each would be its own bounded PR. Only Q1 has started:
+  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1);
   - **Q2**, Edge metadata extraction (alerts 2–5 and 8). It needs an Edge Function deploy;
   - **Q3**, client HTML-entity decoding, plus an app-wide guard against HTML sinks (alert 6);
   - **Q4**, test-oracle hygiene (alerts 1, 16, 17 and 18).
@@ -659,7 +661,7 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 
 ## CSV formula injection (CWE-1236)
 
-**Status: fix proposed, not merged.** The read-only audit `PAPERLUME-SECURITY-CSV-FORMULA-INJECTION-AUDIT-001` classified the finding on 2026-11-24, with the verdict `PAPERLUME_SECURITY_CSV_FORMULA_INJECTION_AUDIT_READY`. `PAPERLUME-SECURITY-CSV-EXPORT-HARDENING-001` (Draft pull request opened 2026-11-24) changes the CSV serializer. Until that pull request merges and deploys, `main` and Production still write the old CSV. This is a first-party finding, not a dependency one.
+**Status: remediated** (`PAPERLUME-SECURITY-CSV-EXPORT-HARDENING-001`). The read-only audit `PAPERLUME-SECURITY-CSV-FORMULA-INJECTION-AUDIT-001` classified the finding on 2026-11-24, with the verdict `PAPERLUME_SECURITY_CSV_FORMULA_INJECTION_AUDIT_READY`. PR #373, which changes the CSV serializer, was opened as a draft that day and merged at 09:40:45 UTC as `a110b4ce`. The merge's tree is the reviewed head's tree (`da7bcfdb`). Production `dpl_EoZNtanyGR9NNThTU6w1tYFZcJvG`, built from that commit, was READY at 09:41:10 UTC. This is a first-party finding, not a dependency one.
 
 | Field | Value |
 |---|---|
@@ -676,7 +678,7 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 - **Exploitation by a third party is conditional.** A value would have to reach another user's library through a file that user imports, such as a shared reference file or a journal's citation download, or through a metadata record its publisher controls. The user would then have to export to CSV and open the file in a spreadsheet. The importers, the database (checked from source) and the export all kept such values unchanged. The importer's trim and HTML-entity decoding can even turn ` =1+1` or `&#61;1+1` into `=1+1`.
 - **Saving in Excel destroyed the formula text.** After Excel saved the file as CSV, the cell held the computed value instead of the original text.
 
-### The fix (Draft)
+### The fix
 
 - **It changes only the serialization boundary.** Stored metadata, the importers, the database and the UI are unchanged, and no dependency changed.
 - A cell whose first character, after any leading whitespace or control characters, is `=`, `+`, `-` or `@`, or the full-width form of one (U+FF1D, U+FF0B, U+FF0D, U+FF20), is written as a quoted field with one added leading TAB: `=1+1` becomes `"<TAB>=1+1"`. This is the form OWASP suggests.
@@ -694,18 +696,310 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 
 - **Verified** in Excel 16.115 for Mac, with the file opened in the background. No cell of the patched export evaluated as a formula, each paper stayed one row, and every cell matched the file apart from Excel's own handling of numbers and of the encoding. The protection held after an Excel save as CSV and reopen. The old export evaluated 18 cells across the same three files.
 - **Not verified:** Windows Excel, LibreOffice Calc, Apple Numbers, Google Sheets, Power Query, Excel's text import wizard, and other locales, including those that separate cells with `;`. The TAB prefix is not a universal guarantee, and OWASP's guidance is that no single approach is safe for every consumer.
+- **Leading C1 controls.** A value that starts with a C1 control character (U+0080–U+009F) followed by a trigger is not neutralized. In the tested Excel it stayed text, and this app's own trim does not remove C1 controls, so re-import does not promote it to a formula. Another spreadsheet that strips them was not tested.
+- **The deployed export was not exercised.** No signed-in Production export or import was run, because none was authorized. That the fix is deployed rests on the deployment record: Production `dpl_EoZNtany…` was built from `a110b4ce`, whose tree is the tested head's.
 - **Re-evaluate** when the CSV columns or serializer change, when another tabular export such as XLSX is added, or when a spreadsheet that users rely on is shown to evaluate the neutralized form.
 
 ### Residual findings
 
-Each is separate work, and none has started:
+Each is separate work. Only the BibTeX item has started:
 
 - **No byte order mark.** Excel for Mac decodes a UTF-8 CSV without one as MacRoman, so `°C` shows as `¬∞C`. Adding one is deferred, because it changes the file for scripts that do not strip it.
 - **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import.
-- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, stay with repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
-- **CodeQL groups Q1–Q4** are unchanged. 18 alerts are open, and this change is not expected to move them.
+- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, are repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
+- **CodeQL.** The CSV change moved no alert: 18 were open on `main` `a110b4ce`, as before it.
 - **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is still unmeasured; see the "What remains" list of the [Zod 4 migration](#zod-4-migration).
+
+## BibTeX codec and record integrity (CodeQL Q1)
+
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrects that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). A further revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001B`, adds [the export notice](#the-export-notice) and a [browser qualification](#browser-qualification), and leaves the exported bytes unchanged. Until the fix merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
+
+| CodeQL alerts | Rule | Location on `a110b4ce` | Triage classification |
+|---|---|---|---|
+| 9–15 | `js/incomplete-sanitization`: "This does not escape backslash characters in the input." | `src/lib/exportUtils.ts` lines 208–216, one alert per `.replace` in `escapeBibTeX` | False positive for the rule's claim, because the chain's first step does escape the backslash. A real escaping bug sits next to them |
+| 7 | `js/double-escaping`: "This replacement may produce '\\' characters that are double-unescaped here." | `src/lib/importParsers.ts` line 87, in `decodeLatex` | Genuine defect |
+
+CodeQL assigns its "high" security severity per rule. The triage rated the group P3. Imported text reaches no HTML interpreter, and no exploitable path was demonstrated. The defects below concern the integrity of the exported file and of the imported data. They do not add up to eight separate exploits.
+
+### What was wrong
+
+Reproduced on `a110b4ce` with the real exporter and importer, exporting two papers:
+
+- **The encoder re-escaped its own output.** This is the bug next to alerts 9–15. `escapeBibTeX` was a chain of replacements, and its `{` and `}` steps also escaped the braces of its own `\textbackslash{}` token. `C:\data` was therefore written `C:\textbackslash\{\}data`, which LaTeX prints as `C:\{}data`. The importer compensated, so the app's own round trip hid the bug.
+- **One brace could break the file.** A literal brace was written `\{` or `\}`, but BibTeX counts every brace: the field scanner in `bibtex.web` has no backslash case. So:
+  - a title `a } b` came back with every other field of its record lost;
+  - a title `a { b` lost both records;
+  - a title containing `x}}, author = {Injected Person}` came back with that text as an author;
+  - an abstract containing `}` was cut there, and the keywords and study type after it were lost.
+
+  A DOI or a link with an unpaired brace, such as `10.1000/x}` or `https://example.com/search?q=}`, was written raw with the same effects. The WHATWG URL serializer keeps `{` and `}` raw in a query or a fragment.
+- **The year and citation key.** A year that is not a number at runtime went raw into both. The value `2020}, title = {Injected Title` broke the entry, and nothing was read back.
+- **The decoder read its own output again (alert 7).** `decodeLatex` was a sequence of replacements, so text one step had produced was decoded again. A literal `\textasciitilde{}` came back as `~`, and `\textasciicircum{}` as `^`.
+- **An accent could take a group's brace.** `{Caf\'e} Society` came back as `{Café Society`.
+- **Outer-brace stripping** removed a leading and a trailing brace even when they belonged to different groups: `{A} and {B}` became `A} and {B`.
+
+### The fix
+
+A shared module, `src/lib/bibtexCodec.ts`, holds both directions, so the tokens the exporter writes are the tokens the importer reads. The tokenizer and field parser are unchanged. They count every brace, as `bibtex.web` does, and that is correct. The defect was an encoder that treated `\}` as if it were not a brace.
+
+- **Text fields** (title, author, journal, abstract, keywords and note) are encoded in one pass. A single `replace` takes one character class and a callback, so every match is a character of the stored value, and no token is matched again.
+  - `\` → `\textbackslash{}`, where the old chain wrote `\textbackslash\{\}`. The other tokens are as before: `&` → `\&` (likewise `%`, `$`, `#` and `_`), `~` → `\textasciitilde{}` and `^` → `\textasciicircum{}`.
+  - A brace whose partner is in the same value is still written `\{` or `\}`, so balanced braces such as `{HIV}` come out byte for byte as before. A brace with no partner is written `\textbraceleft{}` or `\textbraceright{}`. These are LaTeX text symbols, available by default since the February 2020 release, and biber's recode table maps them to `{` and `}`. Zotero's BibTeX exporter draws the same line between paired and unpaired braces, using `\vphantom` for the unpaired ones.
+  - Authors and keywords are encoded one element at a time, so a brace pair never spans two names. BibTeX splits a name list only at an " and " outside braces.
+- **`doi` and `url` stay raw, in both directions.** biblatex reads `doi` as a verbatim field and `url` as a URI field (manual 3.22a, §2.2.1 and §2.2.2). The characters in those fields are the identifier for every tool that reads them, so nothing is escaped or decoded there.
+  - The importer reads them as `main` does: brace pairs that enclose the whole value are removed, the value is trimmed, and nothing is decoded. Text such as `\textbraceleft{}` in another tool's DOI is part of the DOI.
+  - The exporter writes every DOI and URL raw whose braces balance and that is not wrapped in one pair. These come out byte for byte as before, including `10.1000/456#789`, `https://doi.org/10.1000/456%23789` and a DOI that contains `\textbraceleft{}`. Nothing is percent-encoded or LaTeX-escaped.
+  - A value that cannot be written raw goes to a PaperLume field instead, and the standard field is left out. See [DOI and URL fields](#doi-and-url-fields).
+- **Decoding** scans the original input left to right and decodes each recognized token once. Each character is either part of one token or copied once, so a decoded `\` cannot combine with the text after it.
+  - The accent table and its supported forms are unchanged: `{\'e}`, `{\'{e}}`, `\'e` and `\'{e}` for every accent and letter in the table, `\c{c}`, `\v{s}`, and `\ss`, `\aa`, `\ae`, `\AE`, `\o` and `\O`.
+  - An accent's letter braces must now come as a pair, so an accent no longer takes an enclosing group's brace.
+  - The legacy `\textbackslash\{\}` is still read as one backslash.
+- **Outer braces** are stripped only when the opening brace's partner is the last character. Braces are paired as TeX reads them, so `\{` and `\}` never close the group.
+- **Year and citation key.** A number, the column's type, is written as before. Any other runtime value is encoded as text in the `year` field, and the citation key uses the existing `nd`.
+
+| Field | Kind | Written as |
+|---|---|---|
+| Entry type and field names | Structure | Constants, unchanged |
+| Citation key | Structure | Unchanged for a numeric year. Any other year gives `nd` |
+| `title` | Text | Text encoding inside `{{…}}` |
+| `author` | List of text | Each name text-encoded, joined with " and " |
+| `year` | Number | Digits. Any other runtime value is text-encoded |
+| `journal`, `abstract` | Text | Text encoding |
+| `keywords` | List of text | Each keyword text-encoded, joined with ", " |
+| `note` | Text | `Study type: ` followed by the text encoding |
+| `doi` | Identifier | Raw. Left out when the DOI cannot be written raw |
+| `paperlume-doi-v1` | Identifier | Only for a DOI that cannot be written raw, in the version 1 encoding |
+| `pmid` | Identifier | Only a valid PMID, as digits, unchanged |
+| `url` | URL | Raw, chosen by `exportUrlFor` with unchanged precedence. Left out when the URL cannot be written raw |
+| `paperlume-url-v1` | URL | Only for a URL that cannot be written raw, in the version 1 encoding |
+
+PMID authority on import is unchanged. It comes from an explicit `pmid` field first, then from a structurally recognized PubMed record URL in `url`, then from one in `note`.
+
+### DOI and URL fields
+
+**What the review found.** The first version of this fix (Draft commit `58be86c1`) decoded the three tokens `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}` in every `doi` and `url` field, whoever wrote the file. A DOI or URL from another tool that contains that text was therefore imported as a different identifier. These results come from the real parsers on synthetic fixtures. None of the DOIs is registered.
+
+| Field as another tool wrote it | `main` `a110b4ce` reads | Draft `0fd89d8c` read | Now reads |
+|---|---|---|---|
+| `doi = {10.1000/a\textbraceleft{}b}` | `10.1000/a\textbraceleft{}b` | `10.1000/a{b` | `10.1000/a\textbraceleft{}b` |
+| `doi = {10.1000/a\textbraceright{}b}` | `10.1000/a\textbraceright{}b` | `10.1000/a}b` | `10.1000/a\textbraceright{}b` |
+| `doi = {10.1000/a\textbackslash{}b}` | `10.1000/a\textbackslash{}b` | `10.1000/a\b` | `10.1000/a\textbackslash{}b` |
+| `url = {https://example.org/a?q=\textbraceleft{}}` | link `https://example.org/a?q=\textbraceleft{}` | link `https://example.org/a?q={` | link `https://example.org/a?q=\textbraceleft{}` |
+
+The importer could not tell such a field from one the exporter had encoded, because both looked the same. The Draft also wrote an unbalanced DOI such as `10.1000/x}` as `doi = {10.1000/x\textbraceright{}}`. That file is valid BibTeX, and the Draft read the DOI back. Any tool that reads `doi` verbatim, including `main`'s importer, reads `10.1000/x\textbraceright{}` instead, which is a different DOI.
+
+Such text cannot be ruled out as part of a DOI. The DOI Handbook (September 2025, "Syntax of the DOI name", p. 37) lets a DOI name use any Unicode graphic character, punctuation included. A registration agency may choose a narrower set ("Avoiding and resolving ambiguities", pp. 40–41), but the standard does not require one.
+
+**Options compared** for a value that cannot be written raw:
+
+| Option | Standard field | Other tools | PaperLume round trip | Decision |
+|---|---|---|---|---|
+| A. Encode the standard field and add a marker saying so | Holds the encoded text | Read a different DOI or URL | Exact | Rejected: the standard field still misleads every other reader |
+| B. Move the value to a PaperLume field | Left out | See no DOI or URL for that record | Exact | **Chosen** |
+| C. Percent-encode the braces of a URL | Holds changed bytes | Usually get a working link | The stored link changes | Rejected, see below |
+| D. Leave the value out and tell the user | Left out | See no DOI or URL | Lost | Rejected: it needs a product decision and a UI change |
+
+Option C would apply only to URLs, and only to some of them. The exporter's link has already been through the WHATWG URL serializer, which percent-encodes braces in a path and in user information. A raw brace can remain only in a query, a fragment or a host, where the WHATWG URL Standard keeps it raw. RFC 3986 allows `{` and `}` in a URI only percent-encoded (§2.1–2.3), but it treats a percent-encoded octet as equivalent only for unreserved characters (§6.2.2.2). Encoding a brace in a query therefore changes the bytes a server receives, and encoding one in a fragment changes what a page script reads. Neither is provably the same destination, and the importer would then store the changed link.
+
+**The contract.**
+
+- **Standard fields.** `doi` and `url` are written raw and read raw, never decoded. A value is written there when its braces balance, every brace counting, and no single pair encloses all of it after trimming. Then the importer reads back exactly the trimmed value.
+- **PaperLume fields.** Any other value is written to `paperlume-doi-v1` or `paperlume-url-v1`, in the place the standard field would take, and the standard field is not written. In the value, `\`, `{` and `}` are written as `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}`, and nothing else changes.
+- **Grammar, version 1.** Enclosing brace pairs are removed and the value is trimmed, as for the standard field. What remains must be a sequence of characters other than `\`, `{` and `}`, and those three tokens. Anything else makes the field malformed, including another LaTeX command, a lone backslash, a raw brace or a token without its `{}`. A malformed field is ignored as a whole, never read in part. Each token is decoded once.
+- **Names.** Only these two exact names are read. BibTeX compares field names without regard to case, and `bibtex.web` allows hyphens and digits in them. A field with another version or another name is ignored.
+- **Precedence.** A standard field with a value always wins. The PaperLume field is read only when the standard field is missing or empty, so it can never replace a DOI or URL that another tool reads.
+- **No trust.** The field name is not provenance or authentication, since any file can contain it. A value read from a PaperLume field goes through the same checks as the standard field's:
+  - a URL gives a PMID only through structural PubMed recognition;
+  - an explicit `pmid` field still outranks it;
+  - it is stored as a link only if it is an http(s) URL.
+
+  A malformed field gives no DOI, no link and no PMID.
+- **Bounded.** Decoding is one linear pass. A 1 MB field of tokens decodes in about 23 ms, and a malformed one of the same size is rejected in about the same time.
+
+**Which values move.** Only a stored DOI or link whose braces do not balance, or that one pair encloses completely, goes to a PaperLume field. The DOI resolver URL is percent-encoded, so it is always written raw. A PubMed link contains only digits. A journal link can keep a raw brace only in its query, fragment or host. In the 3,000-record synthetic corpus below, 467 of the 5,754 DOIs and links moved, because the corpus deliberately includes such values. Production data was not examined.
+
+**Brace pairs in verbatim fields.** A backslash is an ordinary character in `doi` and `url`, so enclosing pairs are found the way BibTeX pairs braces, with every brace counting. The first version paired them the TeX way there as well. That changed 5,572 of 100,007 random brace-balanced values relative to `main`: for example, `{10.1000/x\}` kept its braces instead of becoming `10.1000/x\`. In these fields the only remaining difference from `main` is the approved one: separate groups such as `{a}{b}` are no longer taken for one enclosing pair. Text fields keep the TeX pairing.
+
+**Other tools.** Standard BibTeX styles ignore a field they do not declare. `bibtex.web` stores only the fields a style declares, and btxdoc says BibTeX ignores any field that is not required or optional. biber's manual states that in tool mode, fields outside the data model are neither read nor output. So a tool that drops unknown fields shows no DOI or URL for a record whose value moved. A tool that keeps them shows the PaperLume field with its tokens. If a tool drops the field and the file comes back, PaperLume reads no DOI for that record. A DOI resolver link in `url`, which is always written raw, survives. biblatex URI-escapes a `url` field that has no `%` when it prints it; that happens in biblatex, and the field itself still carries the stored link.
+
+**Older and Draft-only files.** Older Paperlume exports wrote `doi` and `url` raw, and they are read as before. The first version's encoded standard fields were never released, so they are not supported: such a field is now read as its literal text. No unconditional decoding remains in these fields.
+
+### The export notice
+
+Revision `PAPERLUME-CODEQL-BIBTEX-CODEC-001B` tells the user when a BibTeX export moves a DOI or URL to a PaperLume field. Before it, such an export finished without saying so, and another reference manager could show no DOI or link for those papers.
+
+- **What the exporter reports.** `exportToBibTeX` returns a `BibTeXExportSummary` with four counts:
+  - the papers in the file;
+  - the papers with a DOI or URL in a PaperLume field, each counted once;
+  - the `paperlume-doi-v1` fields written;
+  - the `paperlume-url-v1` fields written.
+
+  Each count comes from the field name `writeIdentifierField` chose for a line in the file. A stored journal link that `exportUrlFor` passed over for a PubMed or DOI link is not in the file, so it is not counted. No separate check exists that could disagree with the download. The summary is returned only after the download has been handed to the browser.
+- **When it appears.** Only for a BibTeX export in which at least one paper has a PaperLume field. It replaces "Export started", so the export still shows one notification. Every other BibTeX export, and every CSV and RIS export, shows "Export started" and "Downloading N papers as FORMAT." exactly as before. A failed download shows only "Export failed".
+- **What it says.** The title is "BibTeX exported with compatibility notice". For one paper, the text reads:
+
+  > 1 paper has a DOI or URL preserved in a PaperLume-specific field. Other reference managers may not recognize it. PaperLume can recover it when the file is reimported.
+
+  For more papers it gives the count, in the plural. It does not say that the download failed, that data was lost, that every reference manager rejects the field, or that any other tool was tested.
+- **How long it stays.** A notification's lifetime depends only on its variant (`TOAST_DURATION_MS`). The default is 5 s. `destructive` gets 8 s, and the policy reserves it for errors and warnings a user needs to read in full.
+  - The notice is about 30 words, so it uses the 8 s tier, as "File import complete with warnings" does for a finished import with a caveat.
+  - That tier is styled as an error, with the destructive colours and Sonner's error icon. Only the title says the export succeeded.
+  - A neutral tier with a longer lifetime would need a change to the global toast policy, which this work does not make.
+- **Accessibility.** The notice appears in the app's one notification region, which is `aria-live="polite"`, and has the labelled "Close toast" button. Its timer pauses while it is hovered and while the tab is hidden. Sonner's keyboard shortcut, Alt+T, pauses it too; see [Browser qualification](#browser-qualification) for what Escape does afterwards.
+
+### Compatibility
+
+- **Ordinary records are unchanged.** A record whose text values have no backslash and no unpaired brace, and whose DOI and URL can be written raw, is written byte for byte as before. A test pins one such record to the old exporter's output. In the synthetic corpus, all 5,287 `doi` and `url` lines the exporter writes are byte-identical to `main`'s, and 467 other values moved to a PaperLume field.
+- **DOI and URL fields from other tools** are read as `main` reads them. Over 114,650 random `doi` fields and 114,650 random `url` fields parsed by the real importers, the only difference was 2,967 `doi` values made of separate groups, the approved change above. The first version differed from `main` on 71,174 and 68,099 of them.
+- **Text fields from other tools.** Over 200,000 random inputs, the new decoder differed from the old on 91, all in three intended classes:
+  - an accent no longer takes a following brace;
+  - an accent with an unclosed brace, such as `\'{e`, is no longer decoded;
+  - decoded text is not read again, so `\o{\'x}` gives `øx`, not `\ox`.
+
+  Separately, neighbouring groups such as `{A} and {B}` are no longer stripped.
+- **Older Paperlume exports.** An older export whose braces balance is read exactly. That held for 132,753 such values from the same random corpus, encoded the old way, and for the literal `\textasciitilde{}` that the old importer read as `~`.
+- **Older exports with an unpaired brace** were never valid BibTeX. They are read as before, by BibTeX's rules, and the lost fields are not reconstructed. Treating `\}` as an escaped brace to recover them would misread valid files in which `\}` closes a field, such as one whose value ends in a backslash.
+- **An inherent ambiguity.** To LaTeX, `\textbackslash\{\}` in another tool's file means a backslash followed by two braces. It is still read as a single backslash, because every older Paperlume export uses it for one.
+- **Stored data is not repaired.** No migration or data change is part of this work.
+
+### Evidence
+
+- **Tests.** Three new files hold 240 tests. Revision 001A added 52 of them, and revision 001B added 21, described below.
+  - `src/lib/__tests__/bibtexCodec.test.ts` (155) checks the codec against expectations written from LaTeX's and BibTeX's rules, including every accent in the table in all four forms, and against an independent transcription of BibTeX's brace rule. For DOIs and URLs it checks:
+    - raw values, including token-like text, and third-party values that must not be decoded;
+    - values that move to a PaperLume field, each with its payload written out by hand;
+    - the field choice and the round trip over 3,000 random values;
+    - precedence and versions, and malformed payloads.
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (72) checks real exports with an independent reader of BibTeX entry structure, whose field names follow `bibtex.web`'s identifier rule. It covers:
+    - entry counts and field names, injection fixtures, and DOI and URL recovery;
+    - unmarked files from other tools with token-like DOIs and URLs;
+    - conflicting and malformed PaperLume fields;
+    - PaperLume URLs checked exactly as `url` is, and several exceptional identifiers before a sentinel record;
+    - scientific text, repeated cycles, older exports, hand-written files in other tools' styles and malformed input.
+  - The first version's tests that wrote the encoded value into `doi` or `url`, or decoded tokens there, were rewritten for the corrected contract. No other assertion changed.
+  - Of the 64 integration tests revision 001A left, 29 fail on `main`. On the first version, 16 of them fail: the token-like third-party values, the encoded standard fields and the PaperLume URL checks. The codec suite's 65 DOI and URL tests need functions the first version does not have.
+- **Negative controls.** 31 weakened copies of the code each fail the suites, and unmodified copies pass all 625 tests of the five BibTeX-related files.
+  - 20 of the copies repeat the first version's controls in the approved areas, aimed at the revised code.
+  - 11 are new, for the identifier contract. Each one:
+    - restores the first version's decoding of `doi` and `url`;
+    - decodes them only when the text parses as a payload;
+    - ignores the PaperLume field;
+    - writes the encoded value into the standard field;
+    - lets a PaperLume field override a standard one;
+    - writes an unbalanced value unencoded into the PaperLume field, which breaks the record and the one after it;
+    - reads a malformed payload in part;
+    - accepts any version;
+    - trusts a PaperLume URL without the link check;
+    - pairs verbatim braces the TeX way;
+    - or drops the enclosing-pair check.
+
+  The existing BibTeX suites alone catch 6 of the 31, the same 6 as before, and none of the 11 new ones.
+- **Other formats.** For 3,000 synthetic records, CSV and RIS output is byte-identical to `main`'s and to the first version's: 427,066 and 770,428 bytes. This corpus adds token-like identifiers to the first round's, which gave 418,241 and 751,711 bytes.
+- **Round trip.** The same 3,000 records come back from a BibTeX export exactly as they did from the first version, field for field. All 2,742 DOIs among them are exact. The 54 records skipped both times have a title of white space only.
+- **The export notice (revision 001B).** 21 more tests:
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts`, now 72, adds 8 for the summary. They cover an ordinary export, one moved DOI, one moved URL, a paper whose DOI and URL both moved, a mix of papers, and a stored link the file does not hold. A seeded mix of 1,000 papers checks every count against the PaperLume fields the structural reader finds in the file. One test covers one download per export and no summary for a failed one.
+  - `src/hooks/__tests__/useExportPapers.test.ts`, new, 13 tests. It drives the real hook with the real `exportUtils`, so every notice follows from the file the serializer wrote. Only the queries, the toast and the browser download are stubbed. It covers the usual notice for ordinary BibTeX, CSV and RIS exports, the notice in the singular and the plural, one paper counted once, a stored link passed over, a failed download, and one download with one notice.
+  - 14 weakened copies of `exportUtils.ts` and `useExportPapers.ts` each fail these tests:
+    - no DOI count, or no URL count;
+    - a paper counted twice;
+    - a URL count taken from the stored link;
+    - a second download, from the exporter or from a preflight export in the hook;
+    - a failed download swallowed by the exporter or by the hook;
+    - a DOI count from a separate brace check;
+    - no notice, or a notice for every BibTeX export;
+    - no singular;
+    - the default 5 s tier;
+    - a reworded usual notice.
+
+    Unmodified copies pass all 85 tests. The 317 tests of the round-trip, codec and CSV security suites catch none of the 14.
+- **BibTeX bytes unchanged by the notice.** On the 3,000-record corpus and 15 targeted records, revision 001B writes exactly the bytes `d919c1f5` writes: 985,549 B and 3,781 B, and each of the 3,015 records exported alone. The comparison fixes the clock: `generateCiteKey` falls back to a key ending in `Date.now()` once 26 suffix letters are used, which happened 48 times in this corpus. That fallback is the same on `main`, so two exports of such a library differ even without this change. The summary matches a line-by-line reading of the file. For the corpus it reports 3,000 papers, 467 affected, 436 DOI fields and 31 URL fields.
+- **Build.** No dependency changed, and `package.json` and `package-lock.json` are byte-identical to the base.
+  - The web build's 9 files: 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name. That holds against `main` and against the first version.
+  - Against `main`, the entry chunk grows by 1,770 B (+788 B with `gzip -9`), in 99 normalized token hunks. Against the first version it grows by 331 B (+248 B), in 36 hunks. Every hunk falls in the BibTeX exporter, the importer or the codec.
+  - The URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
+  - The extension output and its packaged archive are byte-identical.
+  - Revision 001B adds 796 B to the entry chunk against `d919c1f5` (+320 B with `gzip -9`), in 27 token hunks. Only the export summary and the notice changed: no other string, URL origin, environment key or call differs. Against `main` the chunk now grows by 2,566 B (+1,108 B). The rest of the web build, the extension output and its archive are byte-identical to both.
+- **Not verified.** No BibTeX program, biber, pandoc or reference manager is installed here, and installing one was out of scope. The grammar facts come from reading sources, not from running tools: `bibtex.web` 0.99e, btxdoc, the biblatex 3.22a manual and its source, the biber manual, the LaTeX reference manual's list of text symbols, biber's recode table, Zotero's BibTeX translator, the DOI Handbook (September 2025), RFC 3986 and the WHATWG URL Standard. Nobody observed how another tool displays `\textbraceleft{}` and `\textbraceright{}`, or what it does with a PaperLume field. If that matters before release, the checks would be:
+  - biber in tool mode with `--validate-datamodel`, to see that it reports and drops `paperlume-doi-v1`;
+  - an import of the same file into Zotero and into JabRef, to see whether each keeps the field.
+
+### Browser qualification
+
+No CI lane imports or exports BibTeX; the default lane's `mobile-dashboard-density.spec.ts` only checks that the mobile sheet offers "Export as BibTeX". `e2e/file-import-order.spec.ts`, the only end-to-end test that imports a `.bib` file, is not in `DEFAULT_SPECS` in `scripts/e2e-local.mjs`, and neither CI job passes it. The [PFA-C03 plan](pfa-c03-staging-and-security-test-plan.md) put it in "Wave 2" as a mutating, count-sensitive spec that needs an isolated lane, and that wave was never added. It is one of six spec files that no lane runs; the others are `attachments`, `filter-presets`, `mutations`, `notes` and `search-attribution`. The first report of this work said it had passed in CI, which was wrong. This change does not alter the workflows or the default spec list.
+
+For revision 001B, the workflow was qualified once, locally, through the repository's own lifecycle:
+
+```
+npm run test:e2e:local:verify-guards
+npm run test:e2e:local -- e2e/bibtex-qualification.spec.ts e2e/file-import-order.spec.ts
+```
+
+- **Backend.** A disposable local Supabase stack at `http://127.0.0.1:55321`, which the lifecycle validated as loopback, carried the deterministic seed and its synthetic accounts (`e2e-primary@paperlume.test` with 125 papers).
+  - `verify-guards` passed: 58 guard tests, the Production target failing closed, and the browser guard running before any credential is read.
+  - Another local application held the default API port, so the run used a scratch clone of the code commit `dcad61fa`, whose own `supabase/config.toml` moved the ports to the 553xx range. No repository file changed.
+- **The spec.** `bibtex-qualification.spec.ts` was written for this check and is not committed. It uses synthetic records only, stubs nothing and calls no metadata service. Every request the page made went to the loopback host, and the console logged no error.
+
+| Scenario | What ran | Result |
+|---|---|---|
+| A. Ordinary import | A two-entry `.bib` file through Add Papers, file import | 2 added. The stored DOI and link were read back from the Edit dialog and the journal link, and again after a reload |
+| B. Ordinary export | Export as BibTeX, with the search narrowed to those two papers | `citations.bib` with two entries, standard `doi` and `url` lines and no PaperLume field. "Export started" with "Downloading 2 papers as BIBTEX.", no notice. It closed by itself after 5.9 s |
+| C. Exceptional export | An ordinary RIS import created a DOI with an unbalanced `}`, a link with an unbalanced `{` and a sentinel, then two exports | 3 added, stored as given. One paper: `paperlume-doi-v1` and no `doi` line, with the singular notice. All three: `paperlume-doi-v1`, `paperlume-url-v1` and the sentinel's standard fields, with the plural notice, which closed by itself after 8.8 s |
+| D. Reimport | The three-paper file through the same file import | With the originals present: 1 added, 2 skipped, because both recovered DOIs matched the stored ones. Without them: 3 added, the DOI and the link read back as stored, and a new export's identifier fields byte-identical to the first file's |
+| Cleanup | Every fixture paper deleted from its row | 125 papers again |
+
+- **The notice in the browser.** It appeared in the notification region (`aria-live="polite"`) with its "Close toast" button, as the destructive tier (`data-type="error"`).
+  - Hovering held it open for 10 s.
+  - Alt+T put the focus in the toaster and also held it for 10 s.
+  - Escape then moved the focus back to the page but did not restart the timer: the notice was still open 9 s later. That is how Sonner 1.7.4 handles every notification here.
+  - Its close button closed it from the keyboard.
+- **`file-import-order.spec.ts`** passed all 5 of its tests in the same run.
+- **Four runs.** The first three failed on the new spec's own expectations, not on the application:
+  1. It expected different citation keys. A stored "Last, First" author gives keys such as `Dana2024_Bibqord`; see [Limitations not changed here](#limitations-not-changed-here).
+  2. It searched again right after an import. The dashboard search caches a query's matching papers for 30 s, and an import does not clear that cache, so repeating a search made in the last 30 s hid the papers just imported. That is not about BibTeX and is not changed here. The spec now reloads the page first.
+  3. It expected Escape to restart the notice's timer, as described above.
+
+  The fourth run passed all 11 tests in 2.6 minutes, and the lifecycle exited 0.
+- **Teardown.** After each run the lifecycle removed the generated sign-in state, stopped the stack and deleted its volumes. No container or volume of the local project remained.
+
+### CodeQL
+
+The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. The revision adds no code of either alert's kind: its encoding is one `replace` with a callback, and its decoder reads each token once. Only an analysis of `main` after a merge can close the alerts. If the alerts close then, the open count would fall from 18 to 10. That is a projection, not a result.
+
+### Limitations not changed here
+
+These existed before this work, and each is separate:
+
+- `toBibTeXAuthor` reorders a name that is already in "Last, First" form, so `Smith, John` is written `John, Smith,`.
+- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch.
+- The importer splits authors at every " and " and keywords at every comma, braces or not. A MeSH term such as `Neoplasms, Experimental` comes back as two keywords.
+- Only the first line of a study type is read back from `note`, and only a four-digit year from `year`.
+- The tokenizer does not read parenthesis-delimited entries (`@article(…)`), `@string` macros or `#` concatenation. A bare value that contains a brace ends field parsing for its entry. A long run of `@` without a `{` takes quadratic time.
+- Some LaTeX that other tools write is not decoded: Zotero's `{\textbackslash}` and `\{\vphantom{\}}`, `\i`, `\AA`, `\^{}` and math mode. An unknown command that begins with `c` or `v` loses its first letters, so `\cite` becomes `ite`.
+- A literal `"` is written raw. That is harmless to BibTeX in a brace-delimited field, but German `babel` shorthands give `"a` a meaning.
+
+### What remains
+
+Each item is separate work, and none of it is part of this change:
+
+- **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
+- **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
+- **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
+- **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
+- **CI runtime.** The `e2e-local` lane runs close to its job timeout.
+- **Superseded Dependabot pull requests.** PRs 351–354 are still open.
+- **The notice's styling.** The compatibility notice uses the toast policy's warning tier, so it lasts 8 s and is styled as an error. A neutral style with a long enough lifetime would need a new tier in `TOAST_DURATION_MS` and the toaster, which is a change to the global notification policy and was not made here.
+- **E2E spec coverage (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`).** Six tracked spec files run in no lane, including `file-import-order.spec.ts`, the only one that imports a `.bib` file. The audit would:
+  - list every tracked E2E spec and the lane, if any, that runs it;
+  - say why each excluded spec is excluded;
+  - find specs that are obsolete or covered elsewhere;
+  - say which ones need changes to run against disposable local infrastructure;
+  - weigh the added lane time against the `e2e-local` job timeout, and fixture isolation;
+  - name an owner for each spec's coverage.
+
+  Not done here, and no workflow or spec list changed.
+- **External-tool behaviour.** How biber, Zotero and JabRef treat a PaperLume field was not observed; see [Evidence](#evidence).
 
 ## NanoID finding — REMEDIATED
 

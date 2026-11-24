@@ -4,9 +4,9 @@ import { ServerFilterParams, ServerSortParams, areServerFiltersReady } from "./p
 import { buildPapersQuery } from "@/lib/buildPapersQuery";
 import { fetchAllPages } from "@/lib/fetchAllPages";
 import { fetchInChunks } from "@/lib/fetchInChunks";
-import { exportToCSV, exportToRIS, exportToBibTeX } from "@/lib/exportUtils";
+import { exportToCSV, exportToRIS, exportToBibTeX, type BibTeXExportSummary } from "@/lib/exportUtils";
 import { timedQueryFn } from "@/lib/queryTiming";
-import { useToast } from "@/hooks/use-toast";
+import { useToast, type ToastOptions } from "@/hooks/use-toast";
 
 /** Select only the fields needed for export — no attachments. */
 const EXPORT_SELECT =
@@ -18,6 +18,32 @@ const EXPORT_SELECT =
  * call sites and the `exportPapers` callback share the same union.
  */
 export type ExportFormat = "csv" | "ris" | "bibtex";
+
+/**
+ * The notice for a BibTeX export that wrote a DOI or URL to a PaperLume field
+ * (`paperlume-doi-v1` / `paperlume-url-v1`, see `writeIdentifierField`), shown
+ * in place of "Export started"; `null` when the file has no such field, so an
+ * ordinary export is announced exactly as before. Other reference managers may
+ * ignore those fields and show no DOI or URL for the paper, while PaperLume's
+ * own importer reads them back.
+ *
+ * It uses the `destructive` tier of the toast policy (`TOAST_DURATION_MS`),
+ * the one for warnings a user needs to read in full: 8 s instead of 5 s, and
+ * the tier "File import complete with warnings" already uses for a finished
+ * operation with a caveat. The title says that the file was exported.
+ */
+function bibtexCompatibilityNotice(summary: BibTeXExportSummary): ToastOptions | null {
+  const papers = summary.affectedPaperCount;
+  if (papers === 0) return null;
+  return {
+    title: "BibTeX exported with compatibility notice",
+    description:
+      papers === 1
+        ? "1 paper has a DOI or URL preserved in a PaperLume-specific field. Other reference managers may not recognize it. PaperLume can recover it when the file is reimported."
+        : `${papers} papers have DOI or URL values preserved in PaperLume-specific fields. Other reference managers may not recognize them. PaperLume can recover them when the file is reimported.`,
+    variant: "destructive",
+  };
+}
 
 interface UseExportPapersArgs {
   userId: string | undefined;
@@ -116,7 +142,11 @@ export function useExportPapers({
           return;
         }
 
-        // 4. Format and download
+        // 4. Format and download. A BibTeX file with a DOI or URL in a
+        // PaperLume field gets its compatibility notice instead of the usual
+        // one, decided by what the file holds; every other export is
+        // announced as before.
+        let compatibilityNotice: ToastOptions | null = null;
         switch (format) {
           case "csv":
             exportToCSV(hydratedPapers);
@@ -125,14 +155,16 @@ export function useExportPapers({
             exportToRIS(hydratedPapers);
             break;
           case "bibtex":
-            exportToBibTeX(hydratedPapers);
+            compatibilityNotice = bibtexCompatibilityNotice(exportToBibTeX(hydratedPapers));
             break;
         }
 
-        toast({
-          title: "Export started",
-          description: `Downloading ${hydratedPapers.length} paper${hydratedPapers.length !== 1 ? "s" : ""} as ${format.toUpperCase()}.`,
-        });
+        toast(
+          compatibilityNotice ?? {
+            title: "Export started",
+            description: `Downloading ${hydratedPapers.length} paper${hydratedPapers.length !== 1 ? "s" : ""} as ${format.toUpperCase()}.`,
+          },
+        );
       } catch (error) {
         toast({
           title: "Export failed",

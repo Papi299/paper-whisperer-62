@@ -1,4 +1,5 @@
 import { PaperWithTags } from "@/types/database";
+import { encodeBibTeXText, writeIdentifierField, type IdentifierField } from "./bibtexCodec";
 import { canonicalDoiUrl } from "./doiIdentifiers";
 import {
   canonicalPubMedUrl,
@@ -202,20 +203,58 @@ export function exportToRIS(papers: PaperWithTags[]): void {
 }
 
 // ── BibTeX ──
+//
+// Field values go through `bibtexCodec.ts`. Text fields (title, author,
+// journal, abstract, keywords, note) are LaTeX-encoded. The DOI name and the
+// URL are written raw in the standard `doi` and `url` fields, as before. A
+// value that cannot be written raw goes to a PaperLume field in their place
+// (see `writeIdentifierField`). Every field this exporter writes therefore has
+// balanced braces, so no stored value can end its field early or run on into
+// the next field or entry.
 
-/** Escape BibTeX special characters. */
-function escapeBibTeX(value: string): string {
-  return value
-    .replace(/\\/g, "\\textbackslash{}")
-    .replace(/&/g, "\\&")
-    .replace(/%/g, "\\%")
-    .replace(/\$/g, "\\$")
-    .replace(/#/g, "\\#")
-    .replace(/_/g, "\\_")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}")
-    .replace(/~/g, "\\textasciitilde{}")
-    .replace(/\^/g, "\\textasciicircum{}");
+/**
+ * What one `exportToBibTeX` call wrote to its file, for the notice the export
+ * shows. Every count is taken from the fields that were written, as
+ * `writeIdentifierField` named them, so the summary cannot disagree with the
+ * download: an identifier the file does not contain, such as a stored
+ * `journal_url` passed over for a PubMed or DOI link, is never counted.
+ */
+export interface BibTeXExportSummary {
+  /** Papers in the file, one entry each. */
+  paperCount: number;
+  /** Papers with a DOI or URL, or both, in a PaperLume field, each counted once. */
+  affectedPaperCount: number;
+  /** `paperlume-doi-v1` fields in the file. */
+  exceptionalDoiCount: number;
+  /** `paperlume-url-v1` fields in the file. */
+  exceptionalUrlCount: number;
+}
+
+/**
+ * A `doi` or `url` line, or the PaperLume field that replaces it for a value
+ * the standard field cannot hold, and which of the two it is. Field names are
+ * padded as before, so an ordinary record is written byte for byte as it
+ * always was.
+ */
+function bibtexIdentifierLine(
+  field: IdentifierField,
+  value: string,
+): { line: string; inPaperLumeField: boolean } {
+  const written = writeIdentifierField(field, value);
+  return {
+    line: `  ${written.name.padEnd(9)} = {${written.value}}`,
+    inPaperLumeField: written.name !== field,
+  };
+}
+
+/**
+ * The text of the `year` field. A number, the column's type, is written as
+ * JavaScript prints it, which never includes a BibTeX special character, so a
+ * numeric year is written exactly as before. Any other value at runtime is
+ * encoded as text, so it cannot leave its field.
+ */
+function bibtexYear(year: unknown): string {
+  return typeof year === "number" ? String(year) : encodeBibTeXText(String(year));
 }
 
 /**
@@ -250,8 +289,10 @@ function generateCiteKey(
     authorPart = authorPart.replace(/[^a-zA-Z]/g, "");
   }
 
-  // Year part
-  const yearPart = paper.year?.toString() || "nd";
+  // Year part. Only a number, the column's type, contributes: the key has no
+  // delimiters around it, so any other value at runtime gets the same "nd" as
+  // a missing year rather than its characters.
+  const yearPart = typeof paper.year === "number" ? String(paper.year) : "nd";
 
   // Title word
   const stopWords = new Set([
@@ -291,35 +332,53 @@ function generateCiteKey(
   return fallback;
 }
 
-export function exportToBibTeX(papers: PaperWithTags[]): void {
+/**
+ * Writes `papers` as one BibTeX file, downloads it, and returns what the file
+ * holds (see `BibTeXExportSummary`). The summary is returned only once the
+ * download has been handed to the browser, so a caller never announces a file
+ * that was not produced.
+ */
+export function exportToBibTeX(papers: PaperWithTags[]): BibTeXExportSummary {
   const usedKeys = new Set<string>();
+  let affectedPaperCount = 0;
+  let exceptionalDoiCount = 0;
+  let exceptionalUrlCount = 0;
 
   const entries = papers.map((p) => {
     const key = generateCiteKey(p, usedKeys);
     const fields: string[] = [];
+    let affected = false;
 
     // Title — wrap in double braces to preserve capitalisation
-    fields.push(`  title     = {{${escapeBibTeX(p.title)}}}`);
+    fields.push(`  title     = {{${encodeBibTeXText(p.title)}}}`);
 
-    // Authors
+    // Authors. Each name is encoded on its own, so a brace pair never spans
+    // two names: BibTeX splits the list only at an " and " outside braces.
     if (p.authors.length > 0) {
-      const bibtexAuthors = p.authors.map(toBibTeXAuthor).join(" and ");
-      fields.push(`  author    = {${escapeBibTeX(bibtexAuthors)}}`);
+      const bibtexAuthors = p.authors
+        .map((author) => encodeBibTeXText(toBibTeXAuthor(author)))
+        .join(" and ");
+      fields.push(`  author    = {${bibtexAuthors}}`);
     }
 
     // Year
     if (p.year) {
-      fields.push(`  year      = {${p.year}}`);
+      fields.push(`  year      = {${bibtexYear(p.year)}}`);
     }
 
     // Journal
     if (p.journal) {
-      fields.push(`  journal   = {${escapeBibTeX(p.journal)}}`);
+      fields.push(`  journal   = {${encodeBibTeXText(p.journal)}}`);
     }
 
-    // DOI
+    // DOI — the DOI name, raw (see `writeIdentifierField`)
     if (p.doi) {
-      fields.push(`  doi       = {${p.doi}}`);
+      const doi = bibtexIdentifierLine("doi", p.doi);
+      fields.push(doi.line);
+      if (doi.inPaperLumeField) {
+        exceptionalDoiCount++;
+        affected = true;
+      }
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
@@ -328,37 +387,46 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  pmid      = {${pmid}}`);
     }
 
-    // URL
+    // URL — raw, as `exportUrlFor` produced it (see `writeIdentifierField`).
+    // Only this URL is written, so only this URL is counted.
     const url = exportUrlFor(p);
     if (url) {
-      fields.push(`  url       = {${url}}`);
+      const written = bibtexIdentifierLine("url", url);
+      fields.push(written.line);
+      if (written.inPaperLumeField) {
+        exceptionalUrlCount++;
+        affected = true;
+      }
     }
 
     // Abstract
     if (p.abstract) {
-      fields.push(`  abstract  = {${escapeBibTeX(p.abstract)}}`);
+      fields.push(`  abstract  = {${encodeBibTeXText(p.abstract)}}`);
     }
 
-    // Keywords — merge keywords, mesh_terms, substances
+    // Keywords — merge keywords, mesh_terms, substances. Encoded one keyword at
+    // a time, as authors are.
     const allKeywords = [
       ...p.keywords,
       ...(p.mesh_terms || []),
       ...(p.substances || []),
     ];
     if (allKeywords.length > 0) {
-      fields.push(`  keywords  = {${escapeBibTeX(allKeywords.join(", "))}}`);
+      fields.push(`  keywords  = {${allKeywords.map(encodeBibTeXText).join(", ")}}`);
     }
 
     // Note — study type
     if (p.study_type) {
-      fields.push(`  note      = {Study type: ${escapeBibTeX(p.study_type)}}`);
+      fields.push(`  note      = {Study type: ${encodeBibTeXText(p.study_type)}}`);
     }
 
+    if (affected) affectedPaperCount++;
     return `@article{${key},\n${fields.join(",\n")}\n}`;
   });
 
   const bibtex = entries.join("\n\n");
   downloadFile(bibtex, "citations.bib", "application/x-bibtex;charset=utf-8;");
+  return { paperCount: entries.length, affectedPaperCount, exceptionalDoiCount, exceptionalUrlCount };
 }
 
 // ── Shared ──

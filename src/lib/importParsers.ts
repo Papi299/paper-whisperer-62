@@ -22,6 +22,7 @@ import {
   type AuthorProvenance,
   type AuthorProvenanceKind,
 } from "./authorProvenance";
+import { decodeBibTeXText, readIdentifierField, stripOuterBraces } from "./bibtexCodec";
 import type { RawPaperData } from "./normalizePaperData";
 import {
   canonicalPubMedUrl,
@@ -37,74 +38,14 @@ export interface FileParseResult {
   warnings: string[];
 }
 
-// ── LaTeX accent → Unicode lookup ──
-
-const LATEX_ACCENTS: Record<string, string> = {
-  "\\`a": "à", "\\'a": "á", "\\^a": "â", "\\~a": "ã", '\\"a': "ä", "\\aa": "å",
-  "\\`e": "è", "\\'e": "é", "\\^e": "ê", '\\"e': "ë",
-  "\\`i": "ì", "\\'i": "í", "\\^i": "î", '\\"i': "ï",
-  "\\`o": "ò", "\\'o": "ó", "\\^o": "ô", "\\~o": "õ", '\\"o': "ö",
-  "\\`u": "ù", "\\'u": "ú", "\\^u": "û", '\\"u': "ü",
-  "\\'c": "ć", "\\cc": "ç", "\\~n": "ñ", "\\vs": "š", "\\vz": "ž", "\\vr": "ř",
-  "\\`A": "À", "\\'A": "Á", "\\^A": "Â", "\\~A": "Ã", '\\"A': "Ä",
-  "\\`E": "È", "\\'E": "É", "\\^E": "Ê", '\\"E': "Ë",
-  "\\`I": "Ì", "\\'I": "Í", "\\^I": "Î", '\\"I': "Ï",
-  "\\`O": "Ò", "\\'O": "Ó", "\\^O": "Ô", "\\~O": "Õ", '\\"O': "Ö",
-  "\\`U": "Ù", "\\'U": "Ú", "\\^U": "Û", '\\"U': "Ü",
-  "\\'C": "Ć", "\\cC": "Ç", "\\~N": "Ñ", "\\vS": "Š", "\\vZ": "Ž",
-  "\\ss": "ß", "\\o": "ø", "\\O": "Ø", "\\ae": "æ", "\\AE": "Æ",
-};
-
-function decodeLatex(text: string): string {
-  let result = text;
-  // Handle {\'e}, {\`a}, {\"o} patterns (braced accents)
-  result = result.replace(/\{(\\[`'^"~cv])\{?([a-zA-Z])\}?\}/g, (_match, accent, char) => {
-    const key = accent + char;
-    return LATEX_ACCENTS[key] ?? char;
-  });
-  // Handle \'e, \`a, \"o patterns (unbraced accents)
-  result = result.replace(/(\\[`'^"~cv])\{?([a-zA-Z])\}?/g, (_match, accent, char) => {
-    const key = accent + char;
-    return LATEX_ACCENTS[key] ?? char;
-  });
-  // Handle \ss, \o, \ae etc. (command-style)
-  result = result.replace(/\\(ss|aa|ae|AE|o|O)\b\s*/g, (_match, cmd) => {
-    const key = "\\" + cmd;
-    return LATEX_ACCENTS[key] ?? cmd;
-  });
-  // Handle \c{c} (cedilla)
-  result = result.replace(/\\c\{([a-zA-Z])\}/g, (_match, char) => {
-    const key = "\\c" + char;
-    return LATEX_ACCENTS[key] ?? char;
-  });
-  // Handle \v{s} (caron)
-  result = result.replace(/\\v\{([a-zA-Z])\}/g, (_match, char) => {
-    const key = "\\v" + char;
-    return LATEX_ACCENTS[key] ?? char;
-  });
-  // Strip remaining BibTeX escapes: \& → &, \% → %, etc.
-  result = result.replace(/\\([&%$#_{}])/g, "$1");
-  result = result.replace(/\\textbackslash\{\}/g, "\\");
-  result = result.replace(/\\textasciitilde\{\}/g, "~");
-  result = result.replace(/\\textasciicircum\{\}/g, "^");
-  return result;
-}
-
-/**
- * Strip outer braces from a BibTeX value.
- * e.g., "{{Preserving Capitalisation}}" → "Preserving Capitalisation"
- */
-function stripOuterBraces(text: string): string {
-  let result = text.trim();
-  while (result.startsWith("{") && result.endsWith("}")) {
-    result = result.slice(1, -1);
-  }
-  return result;
-}
-
 // ══════════════════════════════════════════════════════════════
 // BibTeX Parser — State-machine tokenizer (NO regex for field extraction)
 // ══════════════════════════════════════════════════════════════
+//
+// The tokenizer and field parser count every brace, as BibTeX does: a
+// backslash before a brace does not exempt it. The reading of field values,
+// LaTeX in text fields and the raw `doi` and `url` fields, is in
+// `bibtexCodec.ts`, next to the encoder that writes them.
 
 interface BibTeXEntry {
   type: string;
@@ -260,12 +201,12 @@ function parseBibTeXFields(fieldsStr: string): Record<string, string> {
 
 function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
   const f = entry.fields;
-  const title = decodeLatex(stripOuterBraces(f.title || "")).trim();
+  const title = decodeBibTeXText(stripOuterBraces(f.title || "")).trim();
   if (!title) return null;
 
   // Parse authors: split on " and ", decode LaTeX
   const authors = f.author
-    ? f.author.split(/\s+and\s+/i).map((a) => decodeLatex(stripOuterBraces(a)).trim()).filter(Boolean)
+    ? f.author.split(/\s+and\s+/i).map((a) => decodeBibTeXText(stripOuterBraces(a)).trim()).filter(Boolean)
     : [];
 
   // Parse year
@@ -275,18 +216,21 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
 
   // Parse keywords: comma-separated
   const keywords = f.keywords
-    ? f.keywords.split(/,\s*/).map((k) => decodeLatex(stripOuterBraces(k)).trim()).filter(Boolean)
+    ? f.keywords.split(/,\s*/).map((k) => decodeBibTeXText(stripOuterBraces(k)).trim()).filter(Boolean)
     : [];
 
   // Extract study type from note field
-  const noteVal = f.note ? decodeLatex(stripOuterBraces(f.note)).trim() : null;
+  const noteVal = f.note ? decodeBibTeXText(stripOuterBraces(f.note)).trim() : null;
   const studyTypeMatch = noteVal?.match(/^Study type:\s*(.+)/i);
   const study_type = studyTypeMatch ? studyTypeMatch[1].trim() : null;
 
-  // DOI
-  const doi = f.doi ? stripOuterBraces(f.doi).trim() : null;
+  // DOI and URL are verbatim fields, read raw as before: nothing in them is
+  // decoded. Only a value the exporter could not write there is read from its
+  // PaperLume field, and only when the standard field has no value. Either way
+  // the value then goes through the same checks below.
+  const doi = readIdentifierField(f, "doi");
 
-  const url = f.url ? stripOuterBraces(f.url).trim() : null;
+  const url = readIdentifierField(f, "url");
 
   // PMID, in descending order of authority. Every source is checked
   // structurally, so a URL that merely mentions PubMed contributes nothing:
@@ -325,10 +269,10 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
       "author",
     ),
     year,
-    journal: f.journal ? decodeLatex(stripOuterBraces(f.journal)).trim() : null,
+    journal: f.journal ? decodeBibTeXText(stripOuterBraces(f.journal)).trim() : null,
     pmid,
     doi,
-    abstract: f.abstract ? decodeLatex(stripOuterBraces(f.abstract)).trim() : null,
+    abstract: f.abstract ? decodeBibTeXText(stripOuterBraces(f.abstract)).trim() : null,
     keywords,
     mesh_terms: [],
     substances: [],
