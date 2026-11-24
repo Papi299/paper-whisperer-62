@@ -1,4 +1,5 @@
 import { PaperWithTags } from "@/types/database";
+import { encodeBibTeXText, encodeBibTeXVerbatim } from "./bibtexCodec";
 import { canonicalDoiUrl } from "./doiIdentifiers";
 import {
   canonicalPubMedUrl,
@@ -202,20 +203,21 @@ export function exportToRIS(papers: PaperWithTags[]): void {
 }
 
 // ── BibTeX ──
+//
+// Field values go through `bibtexCodec.ts`. Text fields (title, author,
+// journal, abstract, keywords, note) are LaTeX-encoded. The DOI and URL fields
+// are verbatim fields and keep the stored DOI name and URL. Every field this
+// exporter writes therefore has balanced braces, so no stored value can end
+// its field early or run on into the next field or entry.
 
-/** Escape BibTeX special characters. */
-function escapeBibTeX(value: string): string {
-  return value
-    .replace(/\\/g, "\\textbackslash{}")
-    .replace(/&/g, "\\&")
-    .replace(/%/g, "\\%")
-    .replace(/\$/g, "\\$")
-    .replace(/#/g, "\\#")
-    .replace(/_/g, "\\_")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}")
-    .replace(/~/g, "\\textasciitilde{}")
-    .replace(/\^/g, "\\textasciicircum{}");
+/**
+ * The text of the `year` field. A number, the column's type, is written as
+ * JavaScript prints it, which never includes a BibTeX special character, so a
+ * numeric year is written exactly as before. Any other value at runtime is
+ * encoded as text, so it cannot leave its field.
+ */
+function bibtexYear(year: unknown): string {
+  return typeof year === "number" ? String(year) : encodeBibTeXText(String(year));
 }
 
 /**
@@ -250,8 +252,10 @@ function generateCiteKey(
     authorPart = authorPart.replace(/[^a-zA-Z]/g, "");
   }
 
-  // Year part
-  const yearPart = paper.year?.toString() || "nd";
+  // Year part. Only a number, the column's type, contributes: the key has no
+  // delimiters around it, so any other value at runtime gets the same "nd" as
+  // a missing year rather than its characters.
+  const yearPart = typeof paper.year === "number" ? String(paper.year) : "nd";
 
   // Title word
   const stopWords = new Set([
@@ -299,27 +303,30 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
     const fields: string[] = [];
 
     // Title — wrap in double braces to preserve capitalisation
-    fields.push(`  title     = {{${escapeBibTeX(p.title)}}}`);
+    fields.push(`  title     = {{${encodeBibTeXText(p.title)}}}`);
 
-    // Authors
+    // Authors. Each name is encoded on its own, so a brace pair never spans
+    // two names: BibTeX splits the list only at an " and " outside braces.
     if (p.authors.length > 0) {
-      const bibtexAuthors = p.authors.map(toBibTeXAuthor).join(" and ");
-      fields.push(`  author    = {${escapeBibTeX(bibtexAuthors)}}`);
+      const bibtexAuthors = p.authors
+        .map((author) => encodeBibTeXText(toBibTeXAuthor(author)))
+        .join(" and ");
+      fields.push(`  author    = {${bibtexAuthors}}`);
     }
 
     // Year
     if (p.year) {
-      fields.push(`  year      = {${p.year}}`);
+      fields.push(`  year      = {${bibtexYear(p.year)}}`);
     }
 
     // Journal
     if (p.journal) {
-      fields.push(`  journal   = {${escapeBibTeX(p.journal)}}`);
+      fields.push(`  journal   = {${encodeBibTeXText(p.journal)}}`);
     }
 
-    // DOI
+    // DOI — the DOI name, written as stored (see `encodeBibTeXVerbatim`)
     if (p.doi) {
-      fields.push(`  doi       = {${p.doi}}`);
+      fields.push(`  doi       = {${encodeBibTeXVerbatim(p.doi)}}`);
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
@@ -328,30 +335,31 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  pmid      = {${pmid}}`);
     }
 
-    // URL
+    // URL — written as `exportUrlFor` produced it (see `encodeBibTeXVerbatim`)
     const url = exportUrlFor(p);
     if (url) {
-      fields.push(`  url       = {${url}}`);
+      fields.push(`  url       = {${encodeBibTeXVerbatim(url)}}`);
     }
 
     // Abstract
     if (p.abstract) {
-      fields.push(`  abstract  = {${escapeBibTeX(p.abstract)}}`);
+      fields.push(`  abstract  = {${encodeBibTeXText(p.abstract)}}`);
     }
 
-    // Keywords — merge keywords, mesh_terms, substances
+    // Keywords — merge keywords, mesh_terms, substances. Encoded one keyword at
+    // a time, as authors are.
     const allKeywords = [
       ...p.keywords,
       ...(p.mesh_terms || []),
       ...(p.substances || []),
     ];
     if (allKeywords.length > 0) {
-      fields.push(`  keywords  = {${escapeBibTeX(allKeywords.join(", "))}}`);
+      fields.push(`  keywords  = {${allKeywords.map(encodeBibTeXText).join(", ")}}`);
     }
 
     // Note — study type
     if (p.study_type) {
-      fields.push(`  note      = {Study type: ${escapeBibTeX(p.study_type)}}`);
+      fields.push(`  note      = {Study type: ${encodeBibTeXText(p.study_type)}}`);
     }
 
     return `@article{${key},\n${fields.join(",\n")}\n}`;
