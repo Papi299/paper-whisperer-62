@@ -713,7 +713,7 @@ Each is separate work. Only the BibTeX item has started:
 
 ## BibTeX codec and record integrity (CodeQL Q1)
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrects that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). Until the fix merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrects that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). A further revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001B`, adds [the export notice](#the-export-notice) and a [browser qualification](#browser-qualification), and leaves the exported bytes unchanged. Until the fix merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
 
 | CodeQL alerts | Rule | Location on `a110b4ce` | Triage classification |
 |---|---|---|---|
@@ -825,6 +825,29 @@ Option C would apply only to URLs, and only to some of them. The exporter's link
 
 **Older and Draft-only files.** Older Paperlume exports wrote `doi` and `url` raw, and they are read as before. The first version's encoded standard fields were never released, so they are not supported: such a field is now read as its literal text. No unconditional decoding remains in these fields.
 
+### The export notice
+
+Revision `PAPERLUME-CODEQL-BIBTEX-CODEC-001B` tells the user when a BibTeX export moves a DOI or URL to a PaperLume field. Before it, such an export finished without saying so, and another reference manager could show no DOI or link for those papers.
+
+- **What the exporter reports.** `exportToBibTeX` returns a `BibTeXExportSummary` with four counts:
+  - the papers in the file;
+  - the papers with a DOI or URL in a PaperLume field, each counted once;
+  - the `paperlume-doi-v1` fields written;
+  - the `paperlume-url-v1` fields written.
+
+  Each count comes from the field name `writeIdentifierField` chose for a line in the file. A stored journal link that `exportUrlFor` passed over for a PubMed or DOI link is not in the file, so it is not counted. No separate check exists that could disagree with the download. The summary is returned only after the download has been handed to the browser.
+- **When it appears.** Only for a BibTeX export in which at least one paper has a PaperLume field. It replaces "Export started", so the export still shows one notification. Every other BibTeX export, and every CSV and RIS export, shows "Export started" and "Downloading N papers as FORMAT." exactly as before. A failed download shows only "Export failed".
+- **What it says.** The title is "BibTeX exported with compatibility notice". For one paper, the text reads:
+
+  > 1 paper has a DOI or URL preserved in a PaperLume-specific field. Other reference managers may not recognize it. PaperLume can recover it when the file is reimported.
+
+  For more papers it gives the count, in the plural. It does not say that the download failed, that data was lost, that every reference manager rejects the field, or that any other tool was tested.
+- **How long it stays.** A notification's lifetime depends only on its variant (`TOAST_DURATION_MS`). The default is 5 s. `destructive` gets 8 s, and the policy reserves it for errors and warnings a user needs to read in full.
+  - The notice is about 30 words, so it uses the 8 s tier, as "File import complete with warnings" does for a finished import with a caveat.
+  - That tier is styled as an error, with the destructive colours and Sonner's error icon. Only the title says the export succeeded.
+  - A neutral tier with a longer lifetime would need a change to the global toast policy, which this work does not make.
+- **Accessibility.** The notice appears in the app's one notification region, which is `aria-live="polite"`, and has the labelled "Close toast" button. Its timer pauses while it is hovered and while the tab is hidden. Sonner's keyboard shortcut, Alt+T, pauses it too; see [Browser qualification](#browser-qualification) for what Escape does afterwards.
+
 ### Compatibility
 
 - **Ordinary records are unchanged.** A record whose text values have no backslash and no unpaired brace, and whose DOI and URL can be written raw, is written byte for byte as before. A test pins one such record to the old exporter's output. In the synthetic corpus, all 5,287 `doi` and `url` lines the exporter writes are byte-identical to `main`'s, and 467 other values moved to a PaperLume field.
@@ -842,20 +865,20 @@ Option C would apply only to URLs, and only to some of them. The exporter's link
 
 ### Evidence
 
-- **Tests.** Two new files hold 219 tests. The revision added 52 of them.
+- **Tests.** Three new files hold 240 tests. Revision 001A added 52 of them, and revision 001B added 21, described below.
   - `src/lib/__tests__/bibtexCodec.test.ts` (155) checks the codec against expectations written from LaTeX's and BibTeX's rules, including every accent in the table in all four forms, and against an independent transcription of BibTeX's brace rule. For DOIs and URLs it checks:
     - raw values, including token-like text, and third-party values that must not be decoded;
     - values that move to a PaperLume field, each with its payload written out by hand;
     - the field choice and the round trip over 3,000 random values;
     - precedence and versions, and malformed payloads.
-  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (64) checks real exports with an independent reader of BibTeX entry structure, whose field names follow `bibtex.web`'s identifier rule. It covers:
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (72) checks real exports with an independent reader of BibTeX entry structure, whose field names follow `bibtex.web`'s identifier rule. It covers:
     - entry counts and field names, injection fixtures, and DOI and URL recovery;
     - unmarked files from other tools with token-like DOIs and URLs;
     - conflicting and malformed PaperLume fields;
     - PaperLume URLs checked exactly as `url` is, and several exceptional identifiers before a sentinel record;
     - scientific text, repeated cycles, older exports, hand-written files in other tools' styles and malformed input.
   - The first version's tests that wrote the encoded value into `doi` or `url`, or decoded tokens there, were rewritten for the corrected contract. No other assertion changed.
-  - On `main`, 29 of the 64 integration tests fail. On the first version, 16 of them fail: the token-like third-party values, the encoded standard fields and the PaperLume URL checks. The codec suite's 65 DOI and URL tests need functions the first version does not have.
+  - Of the 64 integration tests revision 001A left, 29 fail on `main`. On the first version, 16 of them fail: the token-like third-party values, the encoded standard fields and the PaperLume URL checks. The codec suite's 65 DOI and URL tests need functions the first version does not have.
 - **Negative controls.** 31 weakened copies of the code each fail the suites, and unmodified copies pass all 625 tests of the five BibTeX-related files.
   - 20 of the copies repeat the first version's controls in the approved areas, aimed at the revised code.
   - 11 are new, for the identifier contract. Each one:
@@ -874,14 +897,70 @@ Option C would apply only to URLs, and only to some of them. The exporter's link
   The existing BibTeX suites alone catch 6 of the 31, the same 6 as before, and none of the 11 new ones.
 - **Other formats.** For 3,000 synthetic records, CSV and RIS output is byte-identical to `main`'s and to the first version's: 427,066 and 770,428 bytes. This corpus adds token-like identifiers to the first round's, which gave 418,241 and 751,711 bytes.
 - **Round trip.** The same 3,000 records come back from a BibTeX export exactly as they did from the first version, field for field. All 2,742 DOIs among them are exact. The 54 records skipped both times have a title of white space only.
+- **The export notice (revision 001B).** 21 more tests:
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts`, now 72, adds 8 for the summary. They cover an ordinary export, one moved DOI, one moved URL, a paper whose DOI and URL both moved, a mix of papers, and a stored link the file does not hold. A seeded mix of 1,000 papers checks every count against the PaperLume fields the structural reader finds in the file. One test covers one download per export and no summary for a failed one.
+  - `src/hooks/__tests__/useExportPapers.test.ts`, new, 13 tests. It drives the real hook with the real `exportUtils`, so every notice follows from the file the serializer wrote. Only the queries, the toast and the browser download are stubbed. It covers the usual notice for ordinary BibTeX, CSV and RIS exports, the notice in the singular and the plural, one paper counted once, a stored link passed over, a failed download, and one download with one notice.
+  - 14 weakened copies of `exportUtils.ts` and `useExportPapers.ts` each fail these tests:
+    - no DOI count, or no URL count;
+    - a paper counted twice;
+    - a URL count taken from the stored link;
+    - a second download, from the exporter or from a preflight export in the hook;
+    - a failed download swallowed by the exporter or by the hook;
+    - a DOI count from a separate brace check;
+    - no notice, or a notice for every BibTeX export;
+    - no singular;
+    - the default 5 s tier;
+    - a reworded usual notice.
+
+    Unmodified copies pass all 85 tests. The 317 tests of the round-trip, codec and CSV security suites catch none of the 14.
+- **BibTeX bytes unchanged by the notice.** On the 3,000-record corpus and 15 targeted records, revision 001B writes exactly the bytes `d919c1f5` writes: 985,549 B and 3,781 B, and each of the 3,015 records exported alone. The comparison fixes the clock: `generateCiteKey` falls back to a key ending in `Date.now()` once 26 suffix letters are used, which happened 48 times in this corpus. That fallback is the same on `main`, so two exports of such a library differ even without this change. The summary matches a line-by-line reading of the file. For the corpus it reports 3,000 papers, 467 affected, 436 DOI fields and 31 URL fields.
 - **Build.** No dependency changed, and `package.json` and `package-lock.json` are byte-identical to the base.
   - The web build's 9 files: 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name. That holds against `main` and against the first version.
   - Against `main`, the entry chunk grows by 1,770 B (+788 B with `gzip -9`), in 99 normalized token hunks. Against the first version it grows by 331 B (+248 B), in 36 hunks. Every hunk falls in the BibTeX exporter, the importer or the codec.
   - The URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
   - The extension output and its packaged archive are byte-identical.
+  - Revision 001B adds 796 B to the entry chunk against `d919c1f5` (+320 B with `gzip -9`), in 27 token hunks. Only the export summary and the notice changed: no other string, URL origin, environment key or call differs. Against `main` the chunk now grows by 2,566 B (+1,108 B). The rest of the web build, the extension output and its archive are byte-identical to both.
 - **Not verified.** No BibTeX program, biber, pandoc or reference manager is installed here, and installing one was out of scope. The grammar facts come from reading sources, not from running tools: `bibtex.web` 0.99e, btxdoc, the biblatex 3.22a manual and its source, the biber manual, the LaTeX reference manual's list of text symbols, biber's recode table, Zotero's BibTeX translator, the DOI Handbook (September 2025), RFC 3986 and the WHATWG URL Standard. Nobody observed how another tool displays `\textbraceleft{}` and `\textbraceright{}`, or what it does with a PaperLume field. If that matters before release, the checks would be:
   - biber in tool mode with `--validate-datamodel`, to see that it reports and drops `paperlume-doi-v1`;
   - an import of the same file into Zotero and into JabRef, to see whether each keeps the field.
+
+### Browser qualification
+
+No CI lane imports or exports BibTeX; the default lane's `mobile-dashboard-density.spec.ts` only checks that the mobile sheet offers "Export as BibTeX". `e2e/file-import-order.spec.ts`, the only end-to-end test that imports a `.bib` file, is not in `DEFAULT_SPECS` in `scripts/e2e-local.mjs`, and neither CI job passes it. The [PFA-C03 plan](pfa-c03-staging-and-security-test-plan.md) put it in "Wave 2" as a mutating, count-sensitive spec that needs an isolated lane, and that wave was never added. It is one of six spec files that no lane runs; the others are `attachments`, `filter-presets`, `mutations`, `notes` and `search-attribution`. The first report of this work said it had passed in CI, which was wrong. This change does not alter the workflows or the default spec list.
+
+For revision 001B, the workflow was qualified once, locally, through the repository's own lifecycle:
+
+```
+npm run test:e2e:local:verify-guards
+npm run test:e2e:local -- e2e/bibtex-qualification.spec.ts e2e/file-import-order.spec.ts
+```
+
+- **Backend.** A disposable local Supabase stack at `http://127.0.0.1:55321`, which the lifecycle validated as loopback, carried the deterministic seed and its synthetic accounts (`e2e-primary@paperlume.test` with 125 papers).
+  - `verify-guards` passed: 58 guard tests, the Production target failing closed, and the browser guard running before any credential is read.
+  - Another local application held the default API port, so the run used a scratch clone of the code commit `dcad61fa`, whose own `supabase/config.toml` moved the ports to the 553xx range. No repository file changed.
+- **The spec.** `bibtex-qualification.spec.ts` was written for this check and is not committed. It uses synthetic records only, stubs nothing and calls no metadata service. Every request the page made went to the loopback host, and the console logged no error.
+
+| Scenario | What ran | Result |
+|---|---|---|
+| A. Ordinary import | A two-entry `.bib` file through Add Papers, file import | 2 added. The stored DOI and link were read back from the Edit dialog and the journal link, and again after a reload |
+| B. Ordinary export | Export as BibTeX, with the search narrowed to those two papers | `citations.bib` with two entries, standard `doi` and `url` lines and no PaperLume field. "Export started" with "Downloading 2 papers as BIBTEX.", no notice. It closed by itself after 5.9 s |
+| C. Exceptional export | An ordinary RIS import created a DOI with an unbalanced `}`, a link with an unbalanced `{` and a sentinel, then two exports | 3 added, stored as given. One paper: `paperlume-doi-v1` and no `doi` line, with the singular notice. All three: `paperlume-doi-v1`, `paperlume-url-v1` and the sentinel's standard fields, with the plural notice, which closed by itself after 8.8 s |
+| D. Reimport | The three-paper file through the same file import | With the originals present: 1 added, 2 skipped, because both recovered DOIs matched the stored ones. Without them: 3 added, the DOI and the link read back as stored, and a new export's identifier fields byte-identical to the first file's |
+| Cleanup | Every fixture paper deleted from its row | 125 papers again |
+
+- **The notice in the browser.** It appeared in the notification region (`aria-live="polite"`) with its "Close toast" button, as the destructive tier (`data-type="error"`).
+  - Hovering held it open for 10 s.
+  - Alt+T put the focus in the toaster and also held it for 10 s.
+  - Escape then moved the focus back to the page but did not restart the timer: the notice was still open 9 s later. That is how Sonner 1.7.4 handles every notification here.
+  - Its close button closed it from the keyboard.
+- **`file-import-order.spec.ts`** passed all 5 of its tests in the same run.
+- **Four runs.** The first three failed on the new spec's own expectations, not on the application:
+  1. It expected different citation keys. A stored "Last, First" author gives keys such as `Dana2024_Bibqord`; see [Limitations not changed here](#limitations-not-changed-here).
+  2. It searched again right after an import. The dashboard search caches a query's matching papers for 30 s, and an import does not clear that cache, so repeating a search made in the last 30 s hid the papers just imported. That is not about BibTeX and is not changed here. The spec now reloads the page first.
+  3. It expected Escape to restart the notice's timer, as described above.
+
+  The fourth run passed all 11 tests in 2.6 minutes, and the lifecycle exited 0.
+- **Teardown.** After each run the lifecycle removed the generated sign-in state, stopped the stack and deleted its volumes. No container or volume of the local project remained.
 
 ### CodeQL
 
@@ -892,6 +971,7 @@ The change removes the code the eight alerts point at: the replacement chain in 
 These existed before this work, and each is separate:
 
 - `toBibTeXAuthor` reorders a name that is already in "Last, First" form, so `Smith, John` is written `John, Smith,`.
+- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch.
 - The importer splits authors at every " and " and keywords at every comma, braces or not. A MeSH term such as `Neoplasms, Experimental` comes back as two keywords.
 - Only the first line of a study type is read back from `note`, and only a four-digit year from `year`.
 - The tokenizer does not read parenthesis-delimited entries (`@article(…)`), `@string` macros or `#` concatenation. A bare value that contains a brace ends field parsing for its entry. A long run of `@` without a `{` takes quadratic time.
@@ -909,7 +989,16 @@ Each item is separate work, and none of it is part of this change:
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
 - **CI runtime.** The `e2e-local` lane runs close to its job timeout.
 - **Superseded Dependabot pull requests.** PRs 351–354 are still open.
-- **A notice for moved identifiers.** Whether the export should tell the user when a DOI or link goes to a PaperLume field, which other tools may not show, is a product decision. Nothing in the interface says so now.
+- **The notice's styling.** The compatibility notice uses the toast policy's warning tier, so it lasts 8 s and is styled as an error. A neutral style with a long enough lifetime would need a new tier in `TOAST_DURATION_MS` and the toaster, which is a change to the global notification policy and was not made here.
+- **E2E spec coverage (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`).** Six tracked spec files run in no lane, including `file-import-order.spec.ts`, the only one that imports a `.bib` file. The audit would:
+  - list every tracked E2E spec and the lane, if any, that runs it;
+  - say why each excluded spec is excluded;
+  - find specs that are obsolete or covered elsewhere;
+  - say which ones need changes to run against disposable local infrastructure;
+  - weigh the added lane time against the `e2e-local` job timeout, and fixture isolation;
+  - name an owner for each spec's coverage.
+
+  Not done here, and no workflow or spec list changed.
 - **External-tool behaviour.** How biber, Zotero and JabRef treat a PaperLume field was not observed; see [Evidence](#evidence).
 
 ## NanoID finding — REMEDIATED
