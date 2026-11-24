@@ -70,11 +70,51 @@ function exportPmidFor(paper: PaperWithTags): string | null {
 
 // ── CSV ──
 
+/**
+ * A value a spreadsheet may read as a formula (CWE-1236): its first character,
+ * after any leading whitespace or control characters, is `=`, `+`, `-` or `@`,
+ * or the full-width form of one (U+FF1D, U+FF0B, U+FF0D, U+FF20).
+ *
+ * The leading run is skipped rather than only the first character tested,
+ * because a consumer that trims the cell would turn " =1+1" into "=1+1". This
+ * app's own CSV importer trims every value.
+ */
+// eslint-disable-next-line no-control-regex -- C0 controls and DEL belong to the leading run by design
+const FORMULA_LEAD = /^[\s\u0000-\u001F\u007F]*[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/;
+
+/**
+ * A field containing any of these is quoted. Besides RFC 4180's comma, quote
+ * and line break, that includes a bare CR, at which a spreadsheet ends the
+ * row, and `;`, which is the list separator in some spreadsheet locales.
+ */
+const NEEDS_QUOTES = /[",;\r\n]/;
+
+/**
+ * Serializes one text field.
+ *
+ * A formula-leading value is written quoted, with one TAB added in front of
+ * it: `=1+1` becomes `"<TAB>=1+1"`, which a spreadsheet such as Excel reads as
+ * text. No character is removed and nothing else is added, so the stored value
+ * is untouched and only this file's representation of it changes. This app's
+ * CSV importer trims the TAB, so re-importing an export gives the same papers
+ * as before. A program reading the file does see the TAB, and no prefix is
+ * proven safe in every spreadsheet and locale.
+ */
 function escapeCSV(value: string): string {
-  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
+  if (FORMULA_LEAD.test(value)) return `"\t${value.replace(/"/g, '""')}"`;
+  if (NEEDS_QUOTES.test(value)) return `"${value.replace(/"/g, '""')}"`;
   return value;
+}
+
+/**
+ * Serializes one cell. A safe integer, the Year column's type, is written as
+ * its digits, with a minus sign when negative: a spreadsheet reads that as a
+ * number, never as a formula. Every other value is serialized as text, so a
+ * Year that is not a number at runtime is still neutralized.
+ */
+function serializeCSVCell(value: string | number | null): string {
+  if (Number.isSafeInteger(value)) return String(value);
+  return escapeCSV(value == null ? "" : String(value));
 }
 
 export function exportToCSV(papers: PaperWithTags[]): void {
@@ -87,7 +127,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
   const rows = papers.map((p) => [
     p.title,
     p.authors.join("; "),
-    p.year?.toString() || "",
+    p.year,
     p.journal || "",
     exportPmidFor(p) ?? "",
     p.doi || "",
@@ -103,7 +143,7 @@ export function exportToCSV(papers: PaperWithTags[]): void {
 
   const csv = [
     headers.map(escapeCSV).join(","),
-    ...rows.map((row) => row.map(escapeCSV).join(",")),
+    ...rows.map((row) => row.map(serializeCSVCell).join(",")),
   ].join("\n");
 
   downloadFile(csv, "papers_export.csv", "text/csv;charset=utf-8;");
