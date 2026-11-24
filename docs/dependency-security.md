@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A separate CodeQL triage track will classify them (**status: planning only**).
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 
 ## Current audit state
 
@@ -36,6 +36,10 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 **After the CSS and build-toolchain patch set merged (2026-11-23).** It merged as `802d96b8`. On that commit, `npm audit` measured 10 full and 1 production, as projected above, and Dependabot showed **4 open alerts**: 14, 15, 16 and 20. Alerts 1, 3, 5, 6, 8, 17 and 18 had closed as fixed, and no alert had opened. CodeQL still showed 18.
 
 **With the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `e01b6944…`) measures **1** full and **1** production finding, both `zod` (high). It removes nine entries from the full report: `minimatch`, the six `typescript-eslint` entries that reach it, `@vitest/mocker` and `vitest`. The production report is unchanged. This change should close alerts 14, 15 and 20 and leave alert 16 open. That is again a projection, to be re-read after the merge.
+
+**After the test and lint toolchain patch set merged (2026-11-23).** PR #371 merged at 18:43:58 UTC as `94ef1b2c`, and Production `dpl_8tc4Jr8v` was built from it. On that commit, `npm audit` measured 1 full and 1 production finding, both `zod`, as projected above. Dependabot reported alerts 14, 15 and 20 fixed at 18:45:15 UTC and opened none, which left **1 open alert**: 16 (`zod`). CodeQL still showed 18.
+
+**With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `48869379…`) measures **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stays open until this change merges. Closing it would leave no open Dependabot alert, but that is a projection: re-read the alert list after the merge.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -66,7 +70,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`, and it merged on 2026-11-23 as `802d96b8`. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) is next. Its dependency delta is `package-lock.json` plus two raised `devDependencies` declarations in `package.json`. It is not complete until its pull request merges.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`, and it merged on 2026-11-23 as `802d96b8`. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) is next. Its dependency delta is `package-lock.json` plus two raised `devDependencies` declarations in `package.json`, and it merged on 2026-11-23 as `94ef1b2c`. The [Zod 4 migration](#zod-4-migration) is the last. It raises one `dependencies` declaration and, unlike the others, changes application source: two files, with tests. It is not complete until its pull request merges.
 
 ## Current resolved security baseline
 
@@ -83,7 +87,8 @@ These resolutions must not regress. A change that moves any of them backwards re
 | Vite dev-server RCE | `vite` **7.3.8** (declared `^7.3.1`) |
 | React Router patch set (merged as `ae201aff`) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
 | CSS and build-toolchain patch set (merged as `802d96b8`) | `source-map-js` **1.2.4** · `brace-expansion` **1.1.22** (nested v2 line **2.1.8** — replaced by the nested v5 line **5.1.0** in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set)) · `postcss-selector-parser` **6.1.6** · `sucrase` **3.35.1** · `glob` and `@tailwindcss/typography` no longer installed |
-| Test and lint toolchain patch set (this change; on `main` only once its pull request merges) | `typescript-eslint` and the ten `@typescript-eslint/*` packages **8.73.0** (declared `^8.73.0`) · nested `minimatch` **11.0.9**, with `brace-expansion` **5.1.0** below it · `vitest`, `@vitest/mocker` and the other `@vitest/*` packages **4.1.12** (declared `^4.1.12`) · `chai` **6.3.0** |
+| Test and lint toolchain patch set (merged as `94ef1b2c`) | `typescript-eslint` and the ten `@typescript-eslint/*` packages **8.73.0** (declared `^8.73.0`) · nested `minimatch` **11.0.9**, with `brace-expansion` **5.1.0** below it · `vitest`, `@vitest/mocker` and the other `@vitest/*` packages **4.1.12** (declared `^4.1.12`) · `chai` **6.3.0** |
+| Zod 4 migration (this change; on `main` only once its pull request merges) | `zod` **4.6.7** (declared `^4.6.7`). Every Zod array schema that parses data from outside the bundle carries a `.max()` bound (see [Zod 4 migration](#zod-4-migration)) |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -358,7 +363,7 @@ After this change reaches `main`, expect Dependabot to rebase or close these pul
 
 ## Test and lint toolchain patch set
 
-**Status: remediated in this change's `package-lock.json`** (`PAPERLUME-SECURITY-TEST-LINT-CLUSTER-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. On 2026-11-23, `main` `802d96b8` still resolved the "before" versions below, and Production `dpl_EULvMp3j` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build output comparison](#build-output-comparison)).
+**Status: REMEDIATED on `main`** (`PAPERLUME-SECURITY-TEST-LINT-CLUSTER-001`). PR #371 merged on 2026-11-23 as `94ef1b2c`, and that day's automatic Production deployment, `dpl_8tc4Jr8v`, was built from it. Before the merge, `main` `802d96b8` resolved the "before" versions below, and Production `dpl_EULvMp3j` was built with them. None of these packages ships: the built web and extension files are byte-identical with and without this change (see [Build output comparison](#build-output-comparison)). The rest of this section was written while the pull request was open.
 
 | Package | Before → after | Reached through | Advisories | Dependabot |
 |---|---|---|---|---|
@@ -470,11 +475,11 @@ Neither pull request was modified.
 
 - The two pull requests touch disjoint entries, and neither depends on the other. `git merge-tree` combines their heads without conflict. The resulting tree, `2c57a307`, is this change's commit tree, so the fresh resolution from `main` reproduces both pull requests together, byte for byte.
 - At their current heads, both had successful `validate`, `db-tests`, `e2e-local`, `e2e-evidence` and `extension` checks, and a skipped CodeQL check. #354's checks ran against its older base.
-- Dependabot may close or rebase both after this change reaches `main`. Verify that separately.
+- Dependabot could close or rebase both once this change reached `main`. After the merge it closed #370 itself, at 18:46:15 UTC on 2026-11-23. #354 was still open at 22:00 UTC that day.
 
 ### What remains after this change
 
-- **`zod`** (alert 16) is the only finding left in either `npm audit` graph. There is no 3.x fix, so it needs the separate Zod 4 migration.
+- **`zod`** (alert 16) is the only finding left in either `npm audit` graph. There is no 3.x fix, so it needs the separate [Zod 4 migration](#zod-4-migration).
 - **`npm audit` with this change:** full 1 and production 1, both `zod` (high). `npm audit` on this lockfile reports no indexed advisory that Dependabot lacks.
 - **Upstream sweep with this change:** 1 match, down from 4 on `main`.
   - The three real matches on `main` are gone: `minimatch` GHSA-c859 and the two `@vitest/mocker` advisories.
@@ -482,6 +487,126 @@ Neither pull request was modified.
   - The CSS patch set's count also included `esbuild` GHSA-gv7w-rqvm-qjhr. That advisory is filed against esbuild's Deno module, and the sweep now counts only npm-ecosystem entries.
 - **Bundled copies that no scanner sees** are unchanged. Vite 7.3.8 bundles `postcss-selector-parser` 7.1.0 and `ws` 8.18.3. Rollup 4.59.0 bundles `picomatch` 4.0.3. Vitest's bundled `ws` is also unchanged, because Vitest 4.1.12's published code differs from 4.1.11's only in its version string and chunk names.
 - **CodeQL:** 18 open alerts, unchanged. They are a separate track.
+
+## Zod 4 migration
+
+**Status: remediated in this change** (`PAPERLUME-SECURITY-ZOD-4-MIGRATION-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. At 22:00 UTC on 2026-11-23, `main` `94ef1b2c` still resolved `zod` 3.25.76, and Production `dpl_8tc4Jr8v` was built with it. Unlike the patch sets above, Zod ships in the web bundle, and the major upgrade needed application changes.
+
+| Field | Value |
+|---|---|
+| Advisory | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) (CVE-2023-54404): "Zod can exhaust memory while validating oversized constrained collections" (CWE-770) |
+| Severity | **High**: CVSS 3.1 7.5, CVSS 4.0 8.2. Reviewed on 2026-10-23 and not withdrawn |
+| Affected → patched | `<4.6.6` → **4.6.6**. There is no 3.x fix |
+| Mechanism | Parsing an array builds one issue per failing element. Before 4.6.6, even a `.max()` bound was checked only after every element had been walked |
+| Other Zod advisories | GHSA-m95q-7qp3-xv42 (`<=3.22.2`) is already outside 3.25.76. The `colinhacks/zod` repository has published no advisory of its own |
+| Installed before → after | `zod` **3.25.76** (declared `^3.25.76`) → **4.6.7** (declared `^4.6.7`) |
+
+### Where Zod runs
+
+- Two first-party files import it, both in the web bundle:
+  - `src/pages/Auth.tsx` validates the sign-in and sign-up email and password, and the forgot-password email, before any Supabase Auth call;
+  - `src/hooks/useFilterPresets.ts` parses saved filter presets. Each is a `filter_presets.payload` JSONB row that only its owner can write (RLS `auth.uid() = user_id`), and nothing server-side bounds its size.
+- No Edge Function, extension file, script or E2E helper imports Zod. `@hookform/resolvers` 3.10.0 is declared but never imported, and no installed package declares Zod as a dependency or peer.
+- The exposure was the presets' three unbounded arrays: `selectedKeywords`, `selectedProjectIds` and `selectedTagIds`. Only the user can write their own rows, so the impact was limited to their own tab. As with [NanoID](#applicability), the remediation does not rest on that.
+
+### Why 4.6.7
+
+- 4.6.6 is the first release outside the advisory. 4.6.7 (`latest`, published 2026-10-12) is the same code: the two published tarballs differ only in four version constants.
+- 4.6.7's SLSA provenance names `b500a2ee`, a commit on the upstream `main`. 4.6.6's names `284243fb`, a commit from before upstream rewrote `main`. The rewrite removed six malicious commits pushed with a compromised credential on 2026-09-21. Upstream states that none was ever published to npm, and `284243fb` has the same tree as its rewritten copy `9c219833`.
+- Zod 4 needs TypeScript 5.5 or later (5.8.3 is installed), and declares no `engines` and no dependencies.
+- Zod's documentation also asks for `strict` mode. `tsconfig.app.json` sets `"strict": false`, as it did under Zod 3, and all three typechecks pass.
+
+### What the upgrade fixes, and what it does not
+
+4.6.6 checks `.max()`, `.length()` and `.size()` before walking elements, so it protects only **bounded** schemas. Measured locally, for one array of 100,000 elements (a sparse proxy whose elements are all invalid):
+
+| Schema | Elements read | Issues | Time |
+|---|---|---|---|
+| `zod` 3.25.76, `.max(1000)` | 100,000 | 100,001 | 59 ms |
+| `zod` 4.6.5, `.max(1000)` | 100,000 | 100,001 | 65 ms |
+| `zod` 4.6.7, `.max(1000)` | 0 | 1 | 0.2 ms |
+| `zod` 4.6.7, no bound | 100,000 | 100,000 | 79 ms |
+
+The upgrade alone would have left the preset arrays unbounded, so this change also bounds them.
+
+### Application changes
+
+- **`Auth.tsx`, field errors.** Zod 4 removed `ZodError.errors`, an alias of `.issues`. Under Zod 4 the old read throws a `TypeError` inside the submit handler, so no message renders. That caused the typecheck failure and the two failing auth E2E tests on Dependabot's PR #352. The page now reads `.issues`.
+- **`Auth.tsx`, password length.** Zod 4.5.0 changed string `.min()`, `.max()` and `.length()` to count Unicode code points instead of UTF-16 units. With `.min(6)`, a password such as "😀😀😀" (six units, three code points) would newly be refused at sign-in. The rule is now an explicit `value.length >= 6` check with the same message. That is what Zod 3 checked, and what `ResetPassword` checks.
+- **`useFilterPresets.ts`, bounded arrays.**
+  - `PRESET_MAX_SELECTIONS = 1000` bounds all three selection arrays, in the v1, v2 and v3 schemas alike.
+  - Why 1000: keywords filter with AND semantics (`filter_papers_by_keywords` requires every selected keyword), so a selection longer than one paper's term list can never match. Project and tag IDs can name only the user's own projects and tags, and the dashboard adds them one click at a time.
+  - `findOversizedPresetSelection` reads only those arrays' `length`, before any schema runs. An oversized array is rejected in constant time, without reading or copying an element.
+  - A stored row over the cap takes the existing invalid-row path: it is dropped from the menu with a console warning. It is never truncated, and the read path never writes.
+  - `savePreset` and `updatePreset` refuse an over-cap payload before the network, with a toast, so the app cannot write a preset it would then refuse to load.
+  - The payload version stays 3. There is no migration, schema or RLS change.
+
+### Behaviour comparison
+
+- **Differential.** The base (`zod` 3.25.76 with `main`'s source) and the head (`zod` 4.6.7 with this change's source) both ran the repository's own validation code, sliced from Git, on synthetic input:
+  - **Auth:** 60,051 emails (51 hand-picked, the rest generated) × 11 passwords, plus the forgot-password check. Of 720,612 comparisons, none differs. Before the password-rule fix, the only differences were on the three-emoji password.
+  - **Presets:** 60,012 payloads across v1, v2, v3, unknown versions and malformed fields. 1,666 differ, every one because a selection array exceeds 1,000 entries. Nothing else differs, and no input was mutated.
+- **Migration guide.** None of its changes alters these schemas' results:
+  - unknown object keys are still stripped;
+  - `z.enum` and `z.literal` accept and reject the same values;
+  - the `message` argument is deprecated but still applied;
+  - `z.string().email()` is deprecated in favour of `z.email()` but kept, and its results matched on every input above;
+  - issue objects have a new format, which reaches only the dropped-preset console warning.
+
+### Tests
+
+- `src/pages/__tests__/Auth.validation.test.tsx` (20 tests) renders the page with a mocked Supabase client. It covers sign-in, sign-up and forgot-password validation, exact messages and their field associations, the password boundary and astral passwords, valid input reaching the unchanged Supabase calls, and the `returnTo` redirect. It also checks that a validation failure never calls Supabase Auth, never navigates and never throws.
+- `src/hooks/__tests__/useFilterPresets.bounds.test.tsx` (47 tests) covers:
+  - the cap at exactly 1,000 and at 1,001 in every version and field;
+  - the guard reading no element of a 10-million-length array and running before any schema;
+  - the schemas' own `.max()`;
+  - unchanged rejection of malformed payloads, input left unmutated, and no database access while parsing;
+  - stale-ID handling at the cap;
+  - the save and update guards;
+  - a list read that upgrades v1 and v2 rows, drops an oversized row and writes nothing.
+- **Negative controls.** Each was run against a modified copy, then reverted:
+
+  | Change to the code | Tests that fail |
+  |---|---|
+  | Remove the pre-parse guard | 2 |
+  | Remove the schemas' `.max()` | 1 |
+  | Remove the save and update guards | 4 |
+  | Restore `.errors` | 9 |
+  | Restore `.min(6)` | 2 |
+  | Move the cap to 1001 | 1 |
+
+### Lockfile delta and build effect
+
+- **One command:** `npm install zod@4.6.7`, from `main` `94ef1b2c`.
+  - `package.json` changes one line.
+  - `package-lock.json` changes the root declaration and the `node_modules/zod` entry (`version`, `resolved` and `integrity`). There are 527 entries before and after.
+  - Regenerating from the base lockfile with `--package-lock-only` gives a byte-identical file (SHA-256 `48869379…`).
+- **Install checks.**
+  - `npm ci` leaves the lockfile unchanged, and `npm ls --all` exits 0 with a single `zod` copy.
+  - `npm audit signatures` verifies all 468 registry signatures and 80 provenance attestations, including `zod`'s.
+- **Web (`dist/`).** 7 of 9 files are byte-identical, including the stylesheet (`27bf46dd…`), and `index.html` differs only in the entry chunk's name.
+  - The entry chunk grows from 1,953,199 B to 1,983,385 B: +30,186 B, and gzip 552.95 → 564.76 kB.
+  - Building this change's source with `zod` 3.25.76 splits the growth: +715 B is the new application code, and +29,471 B is Zod 4.
+- **Extension (`dist-extension/`).** All 8 files are byte-identical. The extension does not use Zod.
+- **Nothing else moved.**
+  - The Supabase URL and publishable key and the inlined environment keys are identical.
+  - So are the counts of `.rpc(` and `.from("` calls and every Supabase Auth call site.
+  - The only new URL strings are the `json-schema.org` `$schema` values in Zod 4's JSON Schema export, which the app never calls and nothing fetches.
+
+### Dependabot's PR #352
+
+- It proposes `zod` 4.6.6, with the same two-file dependency shape. Its head is `f8f146b0`, on base `626f794f`, behind `main`.
+- `validate` failed on the `Auth.tsx` typecheck error, and `e2e-local` on the two auth validation tests. `db-tests`, `e2e-evidence` and `extension` passed.
+- It was not modified. Expect Dependabot to close it once this change reaches `main`.
+
+### What remains
+
+- **Production data.** No Production row was read. A preset stored with more than 1,000 entries in one selection array would stop appearing in the menu after this change, with its row unchanged. The UI cannot produce one without over 1,000 separate selections. A read-only aggregate would settle it: the largest `jsonb_array_length` of each selection array in `filter_presets.payload`.
+- **`bun.lockb`.** The 2025-01-01 template's Bun lockfile is still tracked. It names `zod` 3.25.76 and packages long since removed from `package.json`. No workflow, script or Vercel build reads it, and Dependabot does not scan it. Removing it is separate hygiene work.
+- **`@hookform/resolvers` 3.10.0** is declared but never imported. Its Zod resolver predates Zod 4, so using it would need an upgrade first.
+- **Password length rule.** Before and after this change, the client's six-character rule counts UTF-16 units, while upstream Supabase Auth counts code points for its server-side minimum (`utf8.RuneCountInString`). Aligning the two is a product decision.
+- **Upstream sweep with this change:** 1 match, the same as on `main`: the `@eslint/plugin-kit` false positive recorded above. It covered 507 package names across 319 repositories. The only gap is `substack/node-concat-map`, whose repository no longer exists.
+- **CodeQL:** 18 open alerts, unchanged by this change; see [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 
 ## Open findings (2026-11-23)
 
@@ -492,7 +617,7 @@ Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is pub
 | `brace-expansion` | 1.1.18 · nested 2.1.4 (two copies) | 1, 3, 5, 6 | GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (high); GHSA-q2hr-2g5m-vwhr (moderate); upstream-only GHSA-6jwq-xf8q-xcwh (high), fixed in 1.1.22 / 2.1.8. 1.1.22 / 2.1.8 in the [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) | lint and build tooling, through `minimatch` |
 | `source-map-js` | 1.2.1 | 8 | GHSA-68fv-2mgg-jv7q (high). 1.2.4 in the CSS and build-toolchain patch set | PostCSS, at build time |
 | `@vitest/mocker` | 4.1.11 | 14, 15 | GHSA-xp26-3454-mjgp and GHSA-qxg6-89mg-rqv8 (moderate). 4.1.12 in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) | Vitest; no browser mode, UI or API server is configured |
-| `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6 | **web bundle** |
+| `zod` | 3.25.76 | 16 | GHSA-mrhx-c7xc-m3w5 (high); no 3.x fix, patched in 4.6.6. 4.6.7 in the [Zod 4 migration](#zod-4-migration) | **web bundle**: auth form validation and saved filter presets |
 | `postcss-selector-parser` | 6.1.4 · nested 6.0.10 | 17 | GHSA-rj75-hqrm-r3gf (moderate); upstream-only GHSA-67xj-gfww-g738 (moderate), fixed in 6.1.6. 6.1.6, with 6.0.10 removed, in the CSS and build-toolchain patch set | Tailwind, at build time. 6.0.10 is pinned by `@tailwindcss/typography`, which no config or source file uses |
 | `glob` | 10.5.0 | 18 | GHSA-3g3m-2fjr-6pw4 (moderate). Removed with `sucrase` 3.35.1 in the CSS and build-toolchain patch set | installed under `sucrase`; only `sucrase`'s CLI loads it |
 | `minimatch` | 9.0.9 (two copies) | 20 | GHSA-g3hv-75wg-m249 (moderate). `npm audit` reports it, and Dependabot opened alert 20 for it when the Vite lockfile reached `main` (see [Current audit state](#current-audit-state)). Also upstream-only GHSA-c859-jr93-m5j4 (moderate). The CSS and build-toolchain patch set removes the `glob` copy; the `typescript-estree` copy remains (see [What this leaves open](#what-this-leaves-open)). 11.0.9 in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) | lint and build tooling |
@@ -500,15 +625,38 @@ Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is pub
 | `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 on `main` since `ae201aff` | a `react-router` dependency; not in any shipped bundle |
 | `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 on `main` since `ae201aff` | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
 
-The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) merged as `802d96b8`, so the `brace-expansion`, `source-map-js`, `postcss-selector-parser` and `glob` rows are resolved on `main` too. The `@vitest/mocker` and `minimatch` rows stay open on `main` until the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) merges. The `zod` row stays open after that.
+The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) merged as `802d96b8`, so the `brace-expansion`, `source-map-js`, `postcss-selector-parser` and `glob` rows are resolved on `main` too. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) merged as `94ef1b2c`, so the `@vitest/mocker` and `minimatch` rows are resolved on `main` as well. Only the `zod` row is open on `main`, until the [Zod 4 migration](#zod-4-migration) merges.
 
-**Planned order (status: planning only).** Each step will be its own bounded PR, re-measured before it starts:
+**Planned order.** Each step is its own bounded PR, re-measured before it starts:
 1. the React Router patch set (merged 2026-11-23 as `ae201aff`; see [React Router patch set](#react-router-patch-set--7186));
 2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (merged 2026-11-23 as `802d96b8`; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
-3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy (Draft pull request opened 2026-11-23; see [Test and lint toolchain patch set](#test-and-lint-toolchain-patch-set));
-4. a separate Zod 4 migration, which needs application changes.
+3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy (merged 2026-11-23 as `94ef1b2c`; see [Test and lint toolchain patch set](#test-and-lint-toolchain-patch-set));
+4. a separate Zod 4 migration, which needs application changes (Draft pull request opened 2026-11-23; see [Zod 4 migration](#zod-4-migration)).
 
-The 18 open CodeQL alerts are outside this document; see [Purpose and authority](#purpose-and-authority).
+The 18 open CodeQL alerts are outside this document's counts; see [Purpose and authority](#purpose-and-authority) and the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+
+## CodeQL triage outcome (2026-11-23)
+
+`PAPERLUME-SECURITY-CODEQL-TRIAGE-001` was a read-only triage of every open CodeQL alert on `main` `94ef1b2c`, with the verdict `PAPERLUME_SECURITY_CODEQL_TRIAGE_READY`. It changed nothing. No alert was dismissed or fixed during the triage, and all 18 remain open. CodeQL numbers its alerts separately from Dependabot.
+
+- **Result.** All 18 alerts are in JavaScript and TypeScript, and all are P3:
+  - 9 are genuine code-quality defects: CodeQL alerts 1–8 and 16;
+  - 9 are false positives for the claim their rule makes: CodeQL alerts 9–15, 17 and 18. Next to alerts 9–15 sits a real BibTeX brace-escaping bug.
+- **No exploitable path was demonstrated among the 18 alerts.** The flagged code's output reaches no HTML interpreter: the app renders it as React text, and the extension uses `textContent`. That is a finding about these 18 alerts, not a statement that the application has no exploitable vulnerability.
+- **Coverage limits.**
+  - GitHub's default setup runs the `default` query suite, not `security-extended`, with the `remote` threat model and no build.
+  - All 18 results come from single-file pattern queries. No data-flow query reported anything.
+  - The Edge Functions import from `esm.sh`, which CodeQL cannot resolve, so the absence of data-flow results there is weak evidence.
+  - The deployed Edge Function bundle was not compared with `main`, and no CodeQL CLI was run locally.
+- **Proposed follow-up repair groups.** Each would be its own bounded PR, and none has started:
+  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15);
+  - **Q2**, Edge metadata extraction (alerts 2–5 and 8). It needs an Edge Function deploy;
+  - **Q3**, client HTML-entity decoding, plus an app-wide guard against HTML sinks (alert 6);
+  - **Q4**, test-oracle hygiene (alerts 1, 16, 17 and 18).
+- **Separate finding: CSV formula injection.** `escapeCSV` in `src/lib/exportUtils.ts` quotes cells, but it does not neutralize a leading `=`, `+`, `-` or `@`. A spreadsheet may therefore evaluate an exported cell as a formula; quoting is not formula neutralization.
+  - CodeQL does not report it, and that is not a reason to dismiss it.
+  - The risk still needs verification, and no exploit against a real user has been shown.
+  - It is provisionally P2, for a dedicated follow-up. The [Zod 4 migration](#zod-4-migration) does not touch CSV, RIS or BibTeX export.
 
 ## NanoID finding — REMEDIATED
 
@@ -750,11 +898,11 @@ npm explain <package>        # introduction path and parent semver range
 gh api "repos/<owner>/<repo>/security-advisories?state=published"   # advisories a package's own repository has published
 ```
 
-On 2026-11-23 both `npm audit` and `npm audit --omit=dev` exit **nonzero** because of the [open findings](#open-findings-2026-11-23). Compare each entry with that list; anything not on it is new and needs investigating. `npm audit` reads only GitHub's Advisory Database. It cannot report an advisory that a package's own repository has published before GitHub lists it, as happened with the Vite RCE. *(Both commands exited zero as measured on 2026-09-20. Before that measurement, the full audit was expected to exit nonzero because of the Vitest residual.)*
+On `main` `94ef1b2c` (2026-11-23) both `npm audit` and `npm audit --omit=dev` exit **nonzero**, for the `zod` finding alone (see [open findings](#open-findings-2026-11-23)). With the [Zod 4 migration](#zod-4-migration)'s lockfile both exit zero. Compare any entry with that list; anything not on it is new and needs investigating. `npm audit` reads only GitHub's Advisory Database. It cannot report an advisory that a package's own repository has published before GitHub lists it, as happened with the Vite RCE. *(Both commands exited zero as measured on 2026-09-20. Before that measurement, the full audit was expected to exit nonzero because of the Vitest residual.)*
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. Apart from the Vite remediation, the merged [React Router](#react-router-patch-set--7186) and [CSS and build-toolchain](#css-and-build-toolchain-patch-set) patch sets and the proposed [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set), the [open findings](#open-findings-2026-11-23) are planned for remediation one bounded PR at a time (**status: planning only**).
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. The Vite remediation and the [React Router](#react-router-patch-set--7186), [CSS and build-toolchain](#css-and-build-toolchain-patch-set) and [test and lint toolchain](#test-and-lint-toolchain-patch-set) patch sets have all merged. The one remaining [open finding](#open-findings-2026-11-23), `zod`, is addressed by the proposed [Zod 4 migration](#zod-4-migration).
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
@@ -763,6 +911,7 @@ Revisit this document when any of the following occurs. By 2026-11-23 the first 
 - a dependency upgrade requires application source changes, a workflow change, or a `package.json` change;
 - a change adds `@tailwindcss/typography` back. Every release through 0.5.20 exact-pins `postcss-selector-parser` 6.0.10, which is inside GHSA-rj75-hqrm-r3gf and GHSA-67xj-gfww-g738 (see [Removing `@tailwindcss/typography`](#removing-tailwindcsstypography));
 - any baseline version in [Current resolved security baseline](#current-resolved-security-baseline) regresses;
+- a Zod schema starts parsing an array that comes from outside the bundle without a `.max()` bound, or `zod` resolves below 4.6.6 again. Zod's size checks protect only bounded schemas (see [Zod 4 migration](#zod-4-migration));
 - the toolchain moves to a new major (Vite, Vitest, or Node engine), which can re-open transitive ranges;
 - a package's own repository publishes an advisory that covers an installed version before GitHub's Advisory Database lists it.
 
