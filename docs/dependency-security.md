@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it.
 
 ## Current audit state
 
@@ -39,7 +39,9 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 
 **After the test and lint toolchain patch set merged (2026-11-23).** PR #371 merged at 18:43:58 UTC as `94ef1b2c`, and Production `dpl_8tc4Jr8v` was built from it. On that commit, `npm audit` measured 1 full and 1 production finding, both `zod`, as projected above. Dependabot reported alerts 14, 15 and 20 fixed at 18:45:15 UTC and opened none, which left **1 open alert**: 16 (`zod`). CodeQL still showed 18.
 
-**With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** This change's lockfile (`package-lock.json` SHA-256 `48869379…`) measures **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stays open until this change merges. Closing it would leave no open Dependabot alert, but that is a projection: re-read the alert list after the merge.
+**With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** Its lockfile (`package-lock.json` SHA-256 `48869379…`) measured **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stayed open until the migration merged. Closing it would leave no open Dependabot alert, but that was a projection, to be re-read after the merge.
+
+**After the Zod 4 migration merged (2026-11-24).** PR #372 merged at 04:43:34 UTC as `cec11199`, and Production `dpl_413PdQNt` was built from it; it was READY at 04:44:02 UTC. On that commit, `npm audit` measured 0 full and 0 production findings, as projected above. Dependabot reported alert 16 fixed at 04:44:17 UTC and opened none, which left **0 open alerts**. CodeQL still showed 18. Re-measured at 07:45 UTC the same day, all of these were unchanged.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -70,7 +72,7 @@ All five bounded clusters are complete. In Clusters 1–4 the **dependency imple
 | 4 | React Router family, **within v6 only** | Complete — partial by design | PR #190 |
 | 5 | React Router **v6 → v7 direct-package migration** | Complete | Audit/design PR #224 · implementation PR #225 |
 
-Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`, and it merged on 2026-11-23 as `802d96b8`. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) is next. Its dependency delta is `package-lock.json` plus two raised `devDependencies` declarations in `package.json`, and it merged on 2026-11-23 as `94ef1b2c`. The [Zod 4 migration](#zod-4-migration) is the last. It raises one `dependencies` declaration and, unlike the others, changes application source: two files, with tests. It is not complete until its pull request merges.
+Across Clusters 1–3 the audit moved from **16 findings (1 critical / 9 high / 4 moderate / 2 low)** to **3 moderate**. Cluster 4 took it to **2 moderate**, and Cluster 5 took it to **zero**. The later `nanoid` advisory was outside all five clusters and was remediated separately as a standalone bounded dependency-advisory task. So were the September 2026 advisories: [Advisory remediation 002](#advisory-remediation-002--remediated) took the full graph from **6** to **2 moderate** and the production graph from **1 low** to **zero**, with a `package-lock.json`-only dependency delta. The [Vite development-server remediation](#vite-development-server-rce--remediated) (2026-11-23) is likewise a standalone bounded task with a `package-lock.json`-only delta. The [React Router patch set](#react-router-patch-set--7186) is the next one: a `package-lock.json`-only dependency delta plus one regression test, merged on 2026-11-23 as `ae201aff`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) follows it. Its dependency delta is `package-lock.json` plus one `devDependencies` line removed from `package.json`, and it merged on 2026-11-23 as `802d96b8`. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) is next. Its dependency delta is `package-lock.json` plus two raised `devDependencies` declarations in `package.json`, and it merged on 2026-11-23 as `94ef1b2c`. The [Zod 4 migration](#zod-4-migration) is the last. It raises one `dependencies` declaration and, unlike the others, changes application source: two files, with tests. It merged on 2026-11-24 as `cec11199`.
 
 ## Current resolved security baseline
 
@@ -88,7 +90,7 @@ These resolutions must not regress. A change that moves any of them backwards re
 | React Router patch set (merged as `ae201aff`) | `react-router` **7.18.6** (declared `^7.18.2`) · `set-cookie-parser` **2.7.3** · `ws` **8.23.0** |
 | CSS and build-toolchain patch set (merged as `802d96b8`) | `source-map-js` **1.2.4** · `brace-expansion` **1.1.22** (nested v2 line **2.1.8** — replaced by the nested v5 line **5.1.0** in the [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set)) · `postcss-selector-parser` **6.1.6** · `sucrase` **3.35.1** · `glob` and `@tailwindcss/typography` no longer installed |
 | Test and lint toolchain patch set (merged as `94ef1b2c`) | `typescript-eslint` and the ten `@typescript-eslint/*` packages **8.73.0** (declared `^8.73.0`) · nested `minimatch` **11.0.9**, with `brace-expansion` **5.1.0** below it · `vitest`, `@vitest/mocker` and the other `@vitest/*` packages **4.1.12** (declared `^4.1.12`) · `chai` **6.3.0** |
-| Zod 4 migration (this change; on `main` only once its pull request merges) | `zod` **4.6.7** (declared `^4.6.7`). Every Zod array schema that parses data from outside the bundle carries a `.max()` bound (see [Zod 4 migration](#zod-4-migration)) |
+| Zod 4 migration (merged as `cec11199`) | `zod` **4.6.7** (declared `^4.6.7`). Every Zod array schema that parses data from outside the bundle carries a `.max()` bound (see [Zod 4 migration](#zod-4-migration)) |
 
 Cluster 3 additionally required `hasown` 2.0.4, because `form-data@4.0.6` declares `hasown@^2.0.4`. It is a patch-level bump that satisfies every existing consumer range and is the one Cluster 3 resolution also reachable in the production graph.
 
@@ -490,7 +492,7 @@ Neither pull request was modified.
 
 ## Zod 4 migration
 
-**Status: remediated in this change** (`PAPERLUME-SECURITY-ZOD-4-MIGRATION-001`, Draft pull request opened 2026-11-23). The fix reaches `main` only when that pull request merges. At 22:00 UTC on 2026-11-23, `main` `94ef1b2c` still resolved `zod` 3.25.76, and Production `dpl_8tc4Jr8v` was built with it. Unlike the patch sets above, Zod ships in the web bundle, and the major upgrade needed application changes.
+**Status: remediated** (`PAPERLUME-SECURITY-ZOD-4-MIGRATION-001`). PR #372 was opened as a draft on 2026-11-23 and merged on 2026-11-24 at 04:43:34 UTC as `cec11199`. Production `dpl_413PdQNt`, built from that commit, was READY at 04:44:02 UTC. Before the merge, at 22:00 UTC on 2026-11-23, `main` `94ef1b2c` still resolved `zod` 3.25.76, and Production `dpl_8tc4Jr8v` was built with it. Unlike the patch sets above, Zod ships in the web bundle, and the major upgrade needed application changes.
 
 | Field | Value |
 |---|---|
@@ -597,7 +599,7 @@ The upgrade alone would have left the preset arrays unbounded, so this change al
 
 - It proposes `zod` 4.6.6, with the same two-file dependency shape. Its head is `f8f146b0`, on base `626f794f`, behind `main`.
 - `validate` failed on the `Auth.tsx` typecheck error, and `e2e-local` on the two auth validation tests. `db-tests`, `e2e-evidence` and `extension` passed.
-- It was not modified. Expect Dependabot to close it once this change reaches `main`.
+- It was not modified. Dependabot was expected to close it once the migration reached `main`. At 08:15 UTC on 2026-11-24, about three and a half hours after the merge, it was still open.
 
 ### What remains
 
@@ -625,13 +627,13 @@ Measured with the Vite 7.3.8 lockfile. "Upstream-only" means the advisory is pub
 | `set-cookie-parser` | 2.7.2 | — | upstream-only GHSA-mxfr-qhmh-pcx4 (high), fixed in 2.7.3. 2.7.3 on `main` since `ae201aff` | a `react-router` dependency; not in any shipped bundle |
 | `ws` | 8.21.3 | — | upstream-only GHSA-37g9-w4hg-h9qr (high), fixed in 8.23.0. 8.23.0 on `main` since `ae201aff` | Node only, and in practice only jsdom's `WebSocket` in Vitest. `@supabase/realtime-js` 2.93.3 declares it but never imports it |
 
-The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) merged as `802d96b8`, so the `brace-expansion`, `source-map-js`, `postcss-selector-parser` and `glob` rows are resolved on `main` too. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) merged as `94ef1b2c`, so the `@vitest/mocker` and `minimatch` rows are resolved on `main` as well. Only the `zod` row is open on `main`, until the [Zod 4 migration](#zod-4-migration) merges.
+The React Router patch set merged as `ae201aff`, so the last three rows are resolved on `main`. The [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set) merged as `802d96b8`, so the `brace-expansion`, `source-map-js`, `postcss-selector-parser` and `glob` rows are resolved on `main` too. The [test and lint toolchain patch set](#test-and-lint-toolchain-patch-set) merged as `94ef1b2c`, so the `@vitest/mocker` and `minimatch` rows are resolved on `main` as well. The [Zod 4 migration](#zod-4-migration) merged as `cec11199` on 2026-11-24, so the `zod` row is resolved on `main` as well, and no row in this table is open there.
 
 **Planned order.** Each step is its own bounded PR, re-measured before it starts:
 1. the React Router patch set (merged 2026-11-23 as `ae201aff`; see [React Router patch set](#react-router-patch-set--7186));
 2. the CSS and build toolchain: `brace-expansion`, `source-map-js`, `postcss-selector-parser`, `sucrase`, and removing the unused `@tailwindcss/typography` (merged 2026-11-23 as `802d96b8`; see [CSS and build-toolchain patch set](#css-and-build-toolchain-patch-set));
 3. the test and lint toolchain: `vitest` and `typescript-eslint`, which carries the last `minimatch` copy (merged 2026-11-23 as `94ef1b2c`; see [Test and lint toolchain patch set](#test-and-lint-toolchain-patch-set));
-4. a separate Zod 4 migration, which needs application changes (Draft pull request opened 2026-11-23; see [Zod 4 migration](#zod-4-migration)).
+4. a separate Zod 4 migration, which needs application changes (merged 2026-11-24 as `cec11199`; see [Zod 4 migration](#zod-4-migration)).
 
 The 18 open CodeQL alerts are outside this document's counts; see [Purpose and authority](#purpose-and-authority) and the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 
@@ -653,10 +655,57 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
   - **Q2**, Edge metadata extraction (alerts 2–5 and 8). It needs an Edge Function deploy;
   - **Q3**, client HTML-entity decoding, plus an app-wide guard against HTML sinks (alert 6);
   - **Q4**, test-oracle hygiene (alerts 1, 16, 17 and 18).
-- **Separate finding: CSV formula injection.** `escapeCSV` in `src/lib/exportUtils.ts` quotes cells, but it does not neutralize a leading `=`, `+`, `-` or `@`. A spreadsheet may therefore evaluate an exported cell as a formula; quoting is not formula neutralization.
-  - CodeQL does not report it, and that is not a reason to dismiss it.
-  - The risk still needs verification, and no exploit against a real user has been shown.
-  - It is provisionally P2, for a dedicated follow-up. The [Zod 4 migration](#zod-4-migration) does not touch CSV, RIS or BibTeX export.
+- **Separate finding: CSV formula injection.** `escapeCSV` in `src/lib/exportUtils.ts` quoted cells but did not neutralize a leading `=`, `+`, `-` or `@`. CodeQL does not report it, and that is not a reason to dismiss it. A dedicated audit has since classified it as Class B, P2; see [CSV formula injection](#csv-formula-injection-cwe-1236).
+
+## CSV formula injection (CWE-1236)
+
+**Status: fix proposed, not merged.** The read-only audit `PAPERLUME-SECURITY-CSV-FORMULA-INJECTION-AUDIT-001` classified the finding on 2026-11-24, with the verdict `PAPERLUME_SECURITY_CSV_FORMULA_INJECTION_AUDIT_READY`. `PAPERLUME-SECURITY-CSV-EXPORT-HARDENING-001` (Draft pull request opened 2026-11-24) changes the CSV serializer. Until that pull request merges and deploys, `main` and Production still write the old CSV. This is a first-party finding, not a dependency one.
+
+| Field | Value |
+|---|---|
+| Weakness | CWE-1236, improper neutralization of formula elements in a CSV file |
+| Classification | **Class B**: a confirmed weakness whose exploitation by a third party is conditional. **P2** |
+| Where | `escapeCSV` and `exportToCSV` in `src/lib/exportUtils.ts`, reached from the library's "Export as CSV" |
+| Tested environment | Microsoft Excel 16.115 for Mac on macOS 27.2.1, locale en_IL, with the file opened as a double-click would open it |
+
+### What the audit found
+
+- **Formula evaluation is confirmed** in the tested Excel. A cell starting with `=`, `+`, `-` or `@` was evaluated in 11 of the 14 columns: Title, Authors, Journal, DOI, Study Types, Keywords, MeSH Terms, Substances, Tags, Projects and Abstract. Year, PMID and URL are held to their existing validation. Authors and Keywords evaluated when the joined list itself formed a formula.
+- **Only harmless arithmetic was tested**, such as `=1+1`. No external request, DDE, macro or data exfiltration was attempted, and no harm beyond evaluation was demonstrated.
+- **A record-boundary defect is confirmed.** A bare CR was written unquoted. Excel and Python's `csv` module both end the row there, so the text after it becomes a row of its own, whose first cell can be a formula. This app's own importer does not split there.
+- **Exploitation by a third party is conditional.** A value would have to reach another user's library through a file that user imports, such as a shared reference file or a journal's citation download, or through a metadata record its publisher controls. The user would then have to export to CSV and open the file in a spreadsheet. The importers, the database (checked from source) and the export all kept such values unchanged. The importer's trim and HTML-entity decoding can even turn ` =1+1` or `&#61;1+1` into `=1+1`.
+- **Saving in Excel destroyed the formula text.** After Excel saved the file as CSV, the cell held the computed value instead of the original text.
+
+### The fix (Draft)
+
+- **It changes only the serialization boundary.** Stored metadata, the importers, the database and the UI are unchanged, and no dependency changed.
+- A cell whose first character, after any leading whitespace or control characters, is `=`, `+`, `-` or `@`, or the full-width form of one (U+FF1D, U+FF0B, U+FF0D, U+FF20), is written as a quoted field with one added leading TAB: `=1+1` becomes `"<TAB>=1+1"`. This is the form OWASP suggests.
+- A field containing a comma, a quote, `;`, CR or LF is quoted. Quoting the bare CR repairs the record-boundary defect. Quoting `;` keeps a field whole where `;` separates cells, but the file still uses commas, so this does not add support for `;`-separator locales.
+- Year is written as its digits when it is a safe integer, as before. Any other runtime value in that column is serialized as text by the same rule as other text, so it cannot reach the file as a formula.
+- The header, the comma delimiter, LF line endings and the encoding (UTF-8 without a byte order mark) are unchanged.
+
+### Trade-offs
+
+- **A program reading the file sees the TAB.** Only formula-leading cells gain one, and no character is removed. A consumer that strips leading whitespace undoes the protection for whatever it writes next.
+- **Re-import is unchanged.** This app's CSV importer already trims every value, so a re-imported export gives the same papers as before. Over three export–import cycles, `parseCSV` and normalization gave results identical to the old export's for the audit's 36 titles, a sweep of every column and fully populated records. No TAB builds up, and leading apostrophes are kept.
+- **Numeric text in a text column stays text.** A Title such as `-0.42` is now a text cell in Excel rather than a number, which matches what is stored.
+
+### Verified, and not verified
+
+- **Verified** in Excel 16.115 for Mac, with the file opened in the background. No cell of the patched export evaluated as a formula, each paper stayed one row, and every cell matched the file apart from Excel's own handling of numbers and of the encoding. The protection held after an Excel save as CSV and reopen. The old export evaluated 18 cells across the same three files.
+- **Not verified:** Windows Excel, LibreOffice Calc, Apple Numbers, Google Sheets, Power Query, Excel's text import wizard, and other locales, including those that separate cells with `;`. The TAB prefix is not a universal guarantee, and OWASP's guidance is that no single approach is safe for every consumer.
+- **Re-evaluate** when the CSV columns or serializer change, when another tabular export such as XLSX is added, or when a spreadsheet that users rely on is shown to evaluate the neutralized form.
+
+### Residual findings
+
+Each is separate work, and none has started:
+
+- **No byte order mark.** Excel for Mac decodes a UTF-8 CSV without one as MacRoman, so `°C` shows as `¬∞C`. Adding one is deferred, because it changes the file for scripts that do not strip it.
+- **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import.
+- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, stay with repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- **CodeQL groups Q1–Q4** are unchanged. 18 alerts are open, and this change is not expected to move them.
+- **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
+- **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is still unmeasured; see the "What remains" list of the [Zod 4 migration](#zod-4-migration).
 
 ## NanoID finding — REMEDIATED
 
@@ -898,11 +947,11 @@ npm explain <package>        # introduction path and parent semver range
 gh api "repos/<owner>/<repo>/security-advisories?state=published"   # advisories a package's own repository has published
 ```
 
-On `main` `94ef1b2c` (2026-11-23) both `npm audit` and `npm audit --omit=dev` exit **nonzero**, for the `zod` finding alone (see [open findings](#open-findings-2026-11-23)). With the [Zod 4 migration](#zod-4-migration)'s lockfile both exit zero. Compare any entry with that list; anything not on it is new and needs investigating. `npm audit` reads only GitHub's Advisory Database. It cannot report an advisory that a package's own repository has published before GitHub lists it, as happened with the Vite RCE. *(Both commands exited zero as measured on 2026-09-20. Before that measurement, the full audit was expected to exit nonzero because of the Vitest residual.)*
+On `main` `94ef1b2c` (2026-11-23) both `npm audit` and `npm audit --omit=dev` exited **nonzero**, for the `zod` finding alone (see [open findings](#open-findings-2026-11-23)). On `main` `cec11199` (2026-11-24), with the [Zod 4 migration](#zod-4-migration) merged, both exit **zero**. Compare any entry with that list; anything not on it is new and needs investigating. `npm audit` reads only GitHub's Advisory Database. It cannot report an advisory that a package's own repository has published before GitHub lists it, as happened with the Vite RCE. *(Both commands exited zero as measured on 2026-09-20. Before that measurement, the full audit was expected to exit nonzero because of the Vitest residual.)*
 
 ## Re-evaluation triggers
 
-Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. The Vite remediation and the [React Router](#react-router-patch-set--7186), [CSS and build-toolchain](#css-and-build-toolchain-patch-set) and [test and lint toolchain](#test-and-lint-toolchain-patch-set) patch sets have all merged. The one remaining [open finding](#open-findings-2026-11-23), `zod`, is addressed by the proposed [Zod 4 migration](#zod-4-migration).
+Revisit this document when any of the following occurs. By 2026-11-23 the first trigger, the Vitest trigger, the React Router trigger and the Router-usage trigger had all fired. The Vite remediation and the [React Router](#react-router-patch-set--7186), [CSS and build-toolchain](#css-and-build-toolchain-patch-set) and [test and lint toolchain](#test-and-lint-toolchain-patch-set) patch sets have all merged. The last [open finding](#open-findings-2026-11-23), `zod`, was remediated by the [Zod 4 migration](#zod-4-migration), merged on 2026-11-24 as `cec11199`. As measured that day, no finding is open in either graph.
 
 - **any** advisory appears in **either** graph. This is the primary trigger, and a new high or critical fires it urgently. (Before 2026-09-20 this trigger excluded the known Vitest residual; with that remediated, there is no excluded finding.)
 - the installed Vitest line falls out of support again, or a new advisory is published against the 4.x line. The 2026-09-20 upgrade moved `vitest` and `@vitest/mocker` off the affected versions onto patched 4.1.11 (both packages are still installed), so the former applicability caveats no longer gate anything. Adopting browser mode or `@vitest/browser`, `mockerPlugin`/`interceptorPlugin`, a Vitest UI/API server or a `host` on the Vitest config would still widen the runner's exposure surface, and is worth a re-measure on its own;
