@@ -1,5 +1,5 @@
 import { PaperWithTags } from "@/types/database";
-import { encodeBibTeXText, encodeBibTeXVerbatim } from "./bibtexCodec";
+import { encodeBibTeXText, writeIdentifierField, type IdentifierField } from "./bibtexCodec";
 import { canonicalDoiUrl } from "./doiIdentifiers";
 import {
   canonicalPubMedUrl,
@@ -205,10 +205,22 @@ export function exportToRIS(papers: PaperWithTags[]): void {
 // ── BibTeX ──
 //
 // Field values go through `bibtexCodec.ts`. Text fields (title, author,
-// journal, abstract, keywords, note) are LaTeX-encoded. The DOI and URL fields
-// are verbatim fields and keep the stored DOI name and URL. Every field this
-// exporter writes therefore has balanced braces, so no stored value can end
-// its field early or run on into the next field or entry.
+// journal, abstract, keywords, note) are LaTeX-encoded. The DOI name and the
+// URL are written raw in the standard `doi` and `url` fields, as before. A
+// value that cannot be written raw goes to a PaperLume field in their place
+// (see `writeIdentifierField`). Every field this exporter writes therefore has
+// balanced braces, so no stored value can end its field early or run on into
+// the next field or entry.
+
+/**
+ * A `doi` or `url` line, or the PaperLume field that replaces it for a value
+ * the standard field cannot hold. Field names are padded as before, so an
+ * ordinary record is written byte for byte as it always was.
+ */
+function bibtexIdentifierLine(field: IdentifierField, value: string): string {
+  const written = writeIdentifierField(field, value);
+  return `  ${written.name.padEnd(9)} = {${written.value}}`;
+}
 
 /**
  * The text of the `year` field. A number, the column's type, is written as
@@ -324,9 +336,9 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  journal   = {${encodeBibTeXText(p.journal)}}`);
     }
 
-    // DOI — the DOI name, written as stored (see `encodeBibTeXVerbatim`)
+    // DOI — the DOI name, raw (see `writeIdentifierField`)
     if (p.doi) {
-      fields.push(`  doi       = {${encodeBibTeXVerbatim(p.doi)}}`);
+      fields.push(bibtexIdentifierLine("doi", p.doi));
     }
 
     // PMID (custom field, widely supported by BibTeX managers)
@@ -335,10 +347,10 @@ export function exportToBibTeX(papers: PaperWithTags[]): void {
       fields.push(`  pmid      = {${pmid}}`);
     }
 
-    // URL — written as `exportUrlFor` produced it (see `encodeBibTeXVerbatim`)
+    // URL — raw, as `exportUrlFor` produced it (see `writeIdentifierField`)
     const url = exportUrlFor(p);
     if (url) {
-      fields.push(`  url       = {${encodeBibTeXVerbatim(url)}}`);
+      fields.push(bibtexIdentifierLine("url", url));
     }
 
     // Abstract

@@ -19,7 +19,7 @@
  *    characters are the value, and a LaTeX escape written there is read as the
  *    escape, not as the character it stands for.
  *
- * So there are two encodings.
+ * So the two kinds of field are handled differently.
  *
  * Text fields (title, author, journal, abstract, keywords, note) are LaTeX.
  * Each special character in the stored value is written as one fixed token, in
@@ -30,14 +30,22 @@
  * These are standard LaTeX text symbols, and their own braces balance. No
  * backslash form of a lone brace could keep BibTeX's count.
  *
- * Verbatim fields (doi, url) are written exactly as stored. That is the
- * established contract: the DOI field carries the DOI name and the URL field
- * carries the URL. The exception is a value that cannot be written raw without
- * breaking the file or changing what this app reads back. That covers braces
- * that do not balance, a value wrapped in one brace pair (which the importer
- * strips), and text that would read back as one of this codec's own tokens.
- * Only such a value has its `\`, `{` and `}` written as tokens. Every other DOI
- * and URL is written byte for byte as before.
+ * The DOI and URL are written to the standard `doi` and `url` fields exactly as
+ * stored, and read from them exactly as written. Nothing in those fields is
+ * ever decoded, whoever wrote the file. That is the established contract, and
+ * it is what every reader of those fields expects: `doi` holds the DOI name and
+ * `url` holds the URL. A DOI that happens to contain `\textbraceleft{}` is that
+ * text, not a brace.
+ *
+ * A few values cannot be written there raw. Braces that do not balance would
+ * end the field early or run on past it, and a value wrapped in one brace pair
+ * would lose the pair when it is read back. Any transformed form of such a
+ * value in the standard field would be a different DOI or URL to every other
+ * reader, so the standard field is left out. The value is written to a
+ * PaperLume field instead, `paperlume-doi-v1` or `paperlume-url-v1`, in which
+ * `\`, `{` and `}` are written `\textbackslash{}`, `\textbraceleft{}` and
+ * `\textbraceright{}`. The field's name says how its value is encoded, so the
+ * importer never has to guess from what a value looks like.
  *
  * Decoding consumes the tokens it recognizes from the original input, left to
  * right, and never reads its own output again. Each character of the input is
@@ -92,6 +100,24 @@ function bracesBalance(text: string): boolean {
 }
 
 /**
+ * Trim `text` and remove the brace pairs that enclose all of it, pairing
+ * braces as `braceMatches` does with the same `texEscapes`.
+ */
+function stripEnclosingPairs(text: string, texEscapes: boolean): string {
+  const trimmed = text.trim();
+  const partner = braceMatches(trimmed, texEscapes);
+
+  let start = 0;
+  let end = trimmed.length - 1;
+  while (start < end && trimmed.charCodeAt(start) === LEFT_BRACE && partner[start] === end) {
+    start++;
+    end--;
+  }
+
+  return trimmed.slice(start, end + 1);
+}
+
+/**
  * Remove brace pairs that enclose a whole value, after trimming it:
  * `{{Preserving Capitalisation}}` becomes `Preserving Capitalisation`.
  *
@@ -103,17 +129,19 @@ function bracesBalance(text: string): boolean {
  * Braces inside the value are kept: they are part of the imported text.
  */
 export function stripOuterBraces(text: string): string {
-  const trimmed = text.trim();
-  const partner = braceMatches(trimmed, true);
+  return stripEnclosingPairs(text, true);
+}
 
-  let start = 0;
-  let end = trimmed.length - 1;
-  while (start < end && trimmed.charCodeAt(start) === LEFT_BRACE && partner[start] === end) {
-    start++;
-    end--;
-  }
-
-  return trimmed.slice(start, end + 1);
+/**
+ * `stripOuterBraces` for a DOI or URL field. A backslash is an ordinary
+ * character in a verbatim value, not a TeX escape, so braces are paired the
+ * way BibTeX pairs them, every brace counting. `{{10.1000/x\}}` is the value
+ * `10.1000/x\`, as the importer has always read it. The only difference from
+ * the importer before this codec is that two separate groups, as in
+ * `{a}{b}`, are no longer taken for one enclosing pair.
+ */
+function stripVerbatimOuterBraces(text: string): string {
+  return stripEnclosingPairs(text, false);
 }
 
 // ── Decoding ──
@@ -257,31 +285,6 @@ export function decodeBibTeXText(text: string): string {
   return decodeTokens(text, TEXT_TOKEN_START, readTextToken);
 }
 
-/** The tokens of the verbatim encoding, and the characters they stand for. */
-const VERBATIM_SYMBOLS: ReadonlyArray<readonly [string, string]> = [
-  ["\\textbackslash{}", "\\"],
-  ["\\textbraceleft{}", "{"],
-  ["\\textbraceright{}", "}"],
-];
-
-const VERBATIM_TOKEN_START = /\\/g;
-
-function readVerbatimToken(text: string, at: number): Token | null {
-  for (const [token, value] of VERBATIM_SYMBOLS) {
-    if (text.startsWith(token, at)) return { value, length: token.length };
-  }
-  return null;
-}
-
-/**
- * Decode a verbatim field (doi, url). Only this codec's three verbatim tokens
- * are read. Everything else is the value itself, so a DOI or URL that was
- * written raw comes back unchanged.
- */
-export function decodeBibTeXVerbatim(text: string): string {
-  return decodeTokens(text, VERBATIM_TOKEN_START, readVerbatimToken);
-}
-
 // ── Encoding ──
 
 const TEXT_SPECIAL = /[\\{}&%$#_~^]/g;
@@ -313,39 +316,130 @@ export function encodeBibTeXText(value: string): string {
   });
 }
 
-const VERBATIM_SPECIAL = /[\\{}]/g;
-
-const VERBATIM_TOKEN: Readonly<Record<string, string>> = {
-  "\\": "\\textbackslash{}",
-  "{": "\\textbraceleft{}",
-  "}": "\\textbraceright{}",
-};
+// ── DOI and URL ──
 
 /**
- * Whether a verbatim value can be written raw, that is, whether the importer
- * reads exactly the trimmed value back from the raw text: its braces balance,
- * no brace pair encloses all of it, and it contains nothing that would decode
- * as a verbatim token.
+ * The PaperLume field that carries a DOI or URL its standard field cannot
+ * hold. The version is part of the name, and the importer reads only these
+ * exact names, so a different encoding would need a new name rather than
+ * change what this one means.
  */
-function writesVerbatimRaw(value: string): boolean {
-  return (
-    bracesBalance(value) &&
-    stripOuterBraces(value) === value.trim() &&
-    decodeBibTeXVerbatim(value) === value
-  );
+const PAPERLUME_IDENTIFIER_FIELDS = {
+  doi: "paperlume-doi-v1",
+  url: "paperlume-url-v1",
+} as const;
+
+/** A standard identifier field. */
+export type IdentifierField = keyof typeof PAPERLUME_IDENTIFIER_FIELDS;
+
+/** A field as the exporter writes it, `name = {value}`. */
+export interface BibTeXField {
+  name: string;
+  value: string;
 }
 
 /**
- * Encode a stored value for a verbatim field (doi, url).
- *
- * The value is written raw whenever that is safe, which is every DOI and URL
- * whose braces balance and that contains no verbatim token. Otherwise `\`, `{`
- * and `}` are written as tokens and nothing else changes. That form is
- * structurally valid, and this app reads the stored value back from it. A tool
- * that reads the field verbatim sees the tokens, but no raw form of such a
- * value could be valid BibTeX at all.
+ * Whether a DOI or URL can be written raw in its standard field. Its braces
+ * must balance, so that the field ends where it should, and no single pair may
+ * enclose all of it, so that the importer reads back exactly the trimmed value.
  */
-export function encodeBibTeXVerbatim(value: string): string {
-  if (writesVerbatimRaw(value)) return value;
-  return value.replace(VERBATIM_SPECIAL, (character: string) => VERBATIM_TOKEN[character]);
+function writesIdentifierRaw(value: string): boolean {
+  return bracesBalance(value) && stripVerbatimOuterBraces(value) === value.trim();
+}
+
+/**
+ * The tokens of a PaperLume identifier field (version 1) and the characters
+ * they stand for. These are three of the LaTeX text symbols that text fields
+ * use. In an identifier field they are the whole grammar.
+ */
+const IDENTIFIER_TOKENS: ReadonlyArray<readonly [token: string, character: string]> = [
+  ["\\textbackslash{}", "\\"],
+  ["\\textbraceleft{}", "{"],
+  ["\\textbraceright{}", "}"],
+];
+
+/** The token each of those characters is written as. */
+const IDENTIFIER_TOKEN: Readonly<Record<string, string>> = Object.fromEntries(
+  IDENTIFIER_TOKENS.map(([token, character]) => [character, token]),
+);
+
+/** The characters an identifier field writes as tokens. */
+const IDENTIFIER_SPECIAL = /[\\{}]/g;
+
+/** The same characters, found one at a time while a field is decoded. */
+const IDENTIFIER_PAYLOAD_SPECIAL = /[\\{}]/g;
+
+/**
+ * How a DOI (`field` "doi") or a URL (`field` "url") is written.
+ *
+ * A value that can be written raw goes to the standard field exactly as
+ * stored, as it always has. That is every DOI and URL whose braces balance and
+ * that is not wrapped in one pair, whatever else it contains. Any other value
+ * goes to the PaperLume field, with `\`, `{` and `}` written as tokens and
+ * nothing else changed. The standard field is then left out, because no form
+ * of such a value written there would read as the same DOI or URL in another
+ * tool.
+ */
+export function writeIdentifierField(field: IdentifierField, value: string): BibTeXField {
+  if (writesIdentifierRaw(value)) return { name: field, value };
+  return {
+    name: PAPERLUME_IDENTIFIER_FIELDS[field],
+    value: value.replace(IDENTIFIER_SPECIAL, (character: string) => IDENTIFIER_TOKEN[character]),
+  };
+}
+
+/**
+ * Decode the value of a PaperLume identifier field, or return `null` if it is
+ * not a valid one. The grammar is strict. Every `\` must begin one of the
+ * three tokens, and every `{` and `}` must belong to one. Anything else,
+ * including any other LaTeX, makes the value malformed, and the whole field is
+ * ignored rather than read in part. Each token is read once, from the field as
+ * written.
+ */
+function decodeIdentifierPayload(payload: string): string | null {
+  let decoded = "";
+  let index = 0;
+
+  while (index < payload.length) {
+    IDENTIFIER_PAYLOAD_SPECIAL.lastIndex = index;
+    const special = IDENTIFIER_PAYLOAD_SPECIAL.exec(payload);
+    if (!special) return decoded + payload.slice(index);
+
+    const at = special.index;
+    const token = IDENTIFIER_TOKENS.find(([text]) => payload.startsWith(text, at));
+    if (!token) return null;
+
+    decoded += payload.slice(index, at) + token[1];
+    index = at + token[0].length;
+  }
+
+  return decoded;
+}
+
+/**
+ * Read a DOI (`field` "doi") or a URL (`field` "url") from an entry's fields.
+ *
+ * The standard field is read raw, as before: brace pairs that enclose the
+ * whole value are removed, the value is trimmed, and nothing is decoded. When
+ * it has a value, that value is the answer. A PaperLume field in the same entry
+ * is then ignored, so it can never replace the DOI or URL that every other
+ * tool reads.
+ *
+ * Only when the standard field is missing or empty is the PaperLume field
+ * read, by the strict grammar above, and a malformed value gives nothing. A
+ * value is not trusted for having come from that field: the importer handles
+ * it exactly as it handles the standard field's value, so a URL still has to
+ * pass the same PubMed recognition and link checks.
+ */
+export function readIdentifierField(
+  fields: Readonly<Record<string, string | undefined>>,
+  field: IdentifierField,
+): string | null {
+  const written = fields[field];
+  const standard = written ? stripVerbatimOuterBraces(written).trim() : null;
+  if (standard) return standard;
+
+  const payload = fields[PAPERLUME_IDENTIFIER_FIELDS[field]];
+  const decoded = payload ? decodeIdentifierPayload(stripVerbatimOuterBraces(payload)) : null;
+  return decoded?.trim() || standard;
 }

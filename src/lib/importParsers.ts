@@ -22,7 +22,7 @@ import {
   type AuthorProvenance,
   type AuthorProvenanceKind,
 } from "./authorProvenance";
-import { decodeBibTeXText, decodeBibTeXVerbatim, stripOuterBraces } from "./bibtexCodec";
+import { decodeBibTeXText, readIdentifierField, stripOuterBraces } from "./bibtexCodec";
 import type { RawPaperData } from "./normalizePaperData";
 import {
   canonicalPubMedUrl,
@@ -43,8 +43,8 @@ export interface FileParseResult {
 // ══════════════════════════════════════════════════════════════
 //
 // The tokenizer and field parser count every brace, as BibTeX does: a
-// backslash before a brace does not exempt it. The decoding of field values,
-// LaTeX in text fields and verbatim text in `doi` and `url`, is in
+// backslash before a brace does not exempt it. The reading of field values,
+// LaTeX in text fields and the raw `doi` and `url` fields, is in
 // `bibtexCodec.ts`, next to the encoder that writes them.
 
 interface BibTeXEntry {
@@ -224,11 +224,13 @@ function bibtexEntryToRawPaper(entry: BibTeXEntry): RawPaperData | null {
   const studyTypeMatch = noteVal?.match(/^Study type:\s*(.+)/i);
   const study_type = studyTypeMatch ? studyTypeMatch[1].trim() : null;
 
-  // DOI and URL are verbatim fields: no LaTeX decoding, only the verbatim
-  // tokens the exporter writes for a value it cannot write raw.
-  const doi = f.doi ? decodeBibTeXVerbatim(stripOuterBraces(f.doi)).trim() : null;
+  // DOI and URL are verbatim fields, read raw as before: nothing in them is
+  // decoded. Only a value the exporter could not write there is read from its
+  // PaperLume field, and only when the standard field has no value. Either way
+  // the value then goes through the same checks below.
+  const doi = readIdentifierField(f, "doi");
 
-  const url = f.url ? decodeBibTeXVerbatim(stripOuterBraces(f.url)).trim() : null;
+  const url = readIdentifierField(f, "url");
 
   // PMID, in descending order of authority. Every source is checked
   // structurally, so a URL that merely mentions PubMed contributes nothing:

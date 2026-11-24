@@ -162,9 +162,12 @@ function bibtexEntries(file: string): OracleEntry[] {
       i++;
       skipSpace();
       if (file[i] === "}") break;
+      // A field name is a BibTeX identifier. bibtex.web allows any character
+      // in one except white space and " # % ' ( ) , = { }.
       const nameStart = i;
-      while (i < file.length && /[A-Za-z]/.test(file[i])) i++;
+      while (i < file.length && !/[\s"#%'(),={}]/.test(file[i])) i++;
       const name = file.slice(nameStart, i);
+      if (!name) throw new Error(`${key}: expected a field name`);
       skipSpace();
       if (file[i] !== "=") throw new Error(`${key}.${name}: expected "="`);
       i++;
@@ -199,6 +202,17 @@ function bibtexNameCount(value: string): number {
 
 const ALL_FIELDS = ["title", "author", "year", "journal", "doi", "url", "abstract", "keywords", "note"];
 const SENTINEL_FIELDS = ["title", "author", "year", "journal", "doi", "pmid", "url", "abstract", "keywords", "note"];
+
+/**
+ * The field names of an entry whose DOI or URL went to its PaperLume field:
+ * the standard field is replaced, in the same place, and not written at all.
+ */
+const withPaperLumeField = (names: readonly string[], field: "doi" | "url"): string[] =>
+  names.map((name) => (name === field ? `paperlume-${field}-v1` : name));
+
+const LB = String.raw`\textbraceleft{}`;
+const RB = String.raw`\textbraceright{}`;
+const BK = String.raw`\textbackslash{}`;
 
 function expectSentinel(file: string, paper: ReturnType<typeof parseBibTeX>["papers"][number] | undefined) {
   const entries = bibtexEntries(file);
@@ -347,29 +361,49 @@ describe("the DOI and URL fields keep their identifiers", () => {
     expect(papers[2].journal_url).toBe("https://journal.example.com/article?id=7&x=%20y#s{2}");
   });
 
-  const UNWRITABLE_DOIS: ReadonlyArray<readonly [doi: string, field: string, resolver: string]> = [
-    ["10.1000/x}", String.raw`10.1000/x\textbraceright{}`, "https://doi.org/10.1000/x%7D"],
-    ["10.1000/x{", String.raw`10.1000/x\textbraceleft{}`, "https://doi.org/10.1000/x%7B"],
-    ["10.1000/}{", String.raw`10.1000/\textbraceright{}\textbraceleft{}`, "https://doi.org/10.1000/%7D%7B"],
+  it("writes token-like text in a DOI or URL raw, as every tool reads it", async () => {
+    const doi = `10.1000/a${LB}b`;
+    const link = `https://journal.example.com/a?q=${LB}x${RB}`;
+    const file = await exportBib([makePaper({ doi }), makePaper({ doi: null, journal_url: link })]);
+
+    expect(file).toContain(`doi       = {${doi}}`);
+    expect(file).toContain("url       = {https://doi.org/10.1000/a%5Ctextbraceleft%7B%7Db}");
+    expect(file).toContain(`url       = {${link}}`);
+    expect(file).not.toContain("paperlume-");
+
+    const papers = parseBibTeX(file).papers;
+    expect(papers[0].doi).toBe(doi);
+    expect(papers[1].journal_url).toBe(link);
+  });
+
+  const UNWRITABLE_DOIS: ReadonlyArray<readonly [doi: string, payload: string, resolver: string]> = [
+    ["10.1000/x}", `10.1000/x${RB}`, "https://doi.org/10.1000/x%7D"],
+    ["10.1000/x{", `10.1000/x${LB}`, "https://doi.org/10.1000/x%7B"],
+    ["10.1000/}{", `10.1000/${RB}${LB}`, "https://doi.org/10.1000/%7D%7B"],
     [
       "10.1000/x}, title = {Injected",
-      String.raw`10.1000/x\textbraceright{}, title = \textbraceleft{}Injected`,
+      `10.1000/x${RB}, title = ${LB}Injected`,
       "https://doi.org/10.1000/x%7D%2C%20title%20=%20%7BInjected",
     ],
+    ["{10.1000/x}", `${LB}10.1000/x${RB}`, "https://doi.org/%7B10.1000/x%7D"],
   ];
 
-  for (const [doi, field, resolver] of UNWRITABLE_DOIS) {
-    it(`encodes the braces of ${JSON.stringify(doi)} and recovers the exact DOI`, async () => {
+  for (const [doi, payload, resolver] of UNWRITABLE_DOIS) {
+    it(`moves ${JSON.stringify(doi)} to its PaperLume field and recovers the exact DOI`, async () => {
       const file = await exportBib([makePaper({ doi }), sentinel()]);
 
-      expect(file).toContain(`doi       = {${field}}`);
-      // The resolver URL is unchanged: it was already percent-encoded.
-      expect(file).toContain(`url       = {${resolver}}`);
+      // Structure first: two entries, each with its own fields. There is no
+      // `doi` field, because any form of this value written there would be a
+      // different DOI to every other tool.
       const entries = bibtexEntries(file);
       expect(entries).toHaveLength(2);
-      expect(fieldNames(entries[0])).toEqual(ALL_FIELDS);
+      expect(fieldNames(entries[0])).toEqual(withPaperLumeField(ALL_FIELDS, "doi"));
+      expect(file).toContain(`  paperlume-doi-v1 = {${payload}}`);
+      // The resolver URL is unchanged: it was already percent-encoded.
+      expect(file).toContain(`url       = {${resolver}}`);
 
-      const { papers } = parseBibTeX(file);
+      const { papers, warnings } = parseBibTeX(file);
+      expect(warnings).toEqual([]);
       expect(papers).toHaveLength(2);
       expect(papers[0].doi).toBe(doi);
       expect(papers[0].journal_url).toBe(resolver);
@@ -378,21 +412,27 @@ describe("the DOI and URL fields keep their identifiers", () => {
     });
   }
 
-  const UNWRITABLE_URLS: ReadonlyArray<readonly [stored: string, field: string]> = [
-    ["https://example.com/search?q=}", String.raw`https://example.com/search?q=\textbraceright{}`],
-    ["https://example.com/search?q={", String.raw`https://example.com/search?q=\textbraceleft{}`],
-    ["https://example.com/a?q=}#{", String.raw`https://example.com/a?q=\textbraceright{}#\textbraceleft{}`],
-    [`https://example.com/a?q=${BS}}`, String.raw`https://example.com/a?q=\textbackslash{}\textbraceright{}`],
+  const UNWRITABLE_URLS: ReadonlyArray<readonly [stored: string, payload: string]> = [
+    ["https://example.com/search?q=}", `https://example.com/search?q=${RB}`],
+    ["https://example.com/search?q={", `https://example.com/search?q=${LB}`],
+    ["https://example.com/a?q=}#{", `https://example.com/a?q=${RB}#${LB}`],
+    [`https://example.com/a?q=${BS}}`, `https://example.com/a?q=${BK}${RB}`],
+    ["https://example.com/a?q=%7B}", `https://example.com/a?q=%7B${RB}`],
   ];
 
-  for (const [stored, field] of UNWRITABLE_URLS) {
-    it(`encodes the braces of the link ${JSON.stringify(stored)} and recovers it exactly`, async () => {
+  for (const [stored, payload] of UNWRITABLE_URLS) {
+    it(`moves the link ${JSON.stringify(stored)} to its PaperLume field and recovers it exactly`, async () => {
       const file = await exportBib([makePaper({ doi: null, journal_url: stored }), sentinel()]);
 
-      expect(file).toContain(`url       = {${field}}`);
-      expect(bibtexEntries(file)).toHaveLength(2);
+      const entries = bibtexEntries(file);
+      expect(entries).toHaveLength(2);
+      expect(fieldNames(entries[0])).toEqual(
+        withPaperLumeField(ALL_FIELDS, "url").filter((name) => name !== "doi"),
+      );
+      expect(file).toContain(`  paperlume-url-v1 = {${payload}}`);
 
-      const { papers } = parseBibTeX(file);
+      const { papers, warnings } = parseBibTeX(file);
+      expect(warnings).toEqual([]);
       expect(papers).toHaveLength(2);
       expect(papers[0]).toMatchObject({ journal_url: stored, pmid: null, pubmed_url: null, doi: null });
       expect(papers[0].abstract).toBe("This is the abstract.");
@@ -417,12 +457,148 @@ describe("the DOI and URL fields keep their identifiers", () => {
 
     expect(file).toContain("pmid      = {12345678}");
     expect(file).toContain("url       = {https://pubmed.ncbi.nlm.nih.gov/12345678/}");
+    expect(file).toContain(`  paperlume-doi-v1 = {10.1000/x${RB}}`);
     expect(parseBibTeX(file).papers[0]).toMatchObject({
       pmid: "12345678",
       pubmed_url: "https://pubmed.ncbi.nlm.nih.gov/12345678/",
       doi: "10.1000/x}",
       journal_url: null,
     });
+  });
+
+  it("keeps every record and field around several exceptional identifiers", async () => {
+    const file = await exportBib([
+      makePaper({ id: "e1", title: "First", doi: "10.1000/x}" }),
+      makePaper({ id: "e2", title: "Second", doi: null, journal_url: "https://example.com/?q={" }),
+      makePaper({ id: "e3", title: "Third", doi: "{10.1000/y}", pmid: "12345678" }),
+      makePaper({ id: "e4", title: "Fourth", doi: `10.1000/a${LB}b` }),
+      sentinel(),
+    ]);
+
+    const entries = bibtexEntries(file);
+    expect(entries.map(fieldNames)).toEqual([
+      ["title", "author", "year", "journal", "paperlume-doi-v1", "url", "abstract", "keywords", "note"],
+      ["title", "author", "year", "journal", "paperlume-url-v1", "abstract", "keywords", "note"],
+      ["title", "author", "year", "journal", "paperlume-doi-v1", "pmid", "url", "abstract", "keywords", "note"],
+      ["title", "author", "year", "journal", "doi", "url", "abstract", "keywords", "note"],
+      SENTINEL_FIELDS,
+    ]);
+
+    const { papers, warnings } = parseBibTeX(file);
+    expect(warnings).toEqual([]);
+    expect(papers.map((paper) => [paper.title, paper.doi, paper.journal_url, paper.pmid])).toEqual([
+      ["First", "10.1000/x}", "https://doi.org/10.1000/x%7D", null],
+      ["Second", null, "https://example.com/?q={", null],
+      ["Third", "{10.1000/y}", null, "12345678"],
+      ["Fourth", `10.1000/a${LB}b`, "https://doi.org/10.1000/a%5Ctextbraceleft%7B%7Db", null],
+      ["Sentinel Paper", "10.1000/sentinel", null, "87654321"],
+    ]);
+    expectSentinel(file, papers[4]);
+  });
+});
+
+describe("a DOI or URL another tool wrote is read as written", () => {
+  it("never decodes token-like text in a standard doi or url field", () => {
+    const file = String.raw`@article{a, title = {A}, doi = {10.1000/a\textbraceleft{}b}}
+@article{b, title = {B}, doi = {10.1000/a\textbraceright{}b}}
+@article{c, title = {C}, doi = {10.1000/a\textbackslash{}b}}
+@article{d, title = {D}, doi = {10.1000/\textbackslash{}\textbraceleft{}\textbraceright{}\textbraceleft{}}}
+@article{e, title = {E}, doi = {10.1002/(SICI)1097-4636(199706)35:4<487::AID-JBM9\textbraceright{}>3.0.CO;2-K}}
+@article{f, title = {F}, url = {https://doi.org/10.1000/456%23789}}
+@article{g, title = {G}, url = {https://journal.example.com/article?id=7&q=\textbraceleft{}x\textbraceright{}#\textbackslash{}}}
+@article{h, title = {H}, url = {https://example.com/a%20b?c=%7Bd%7D}}
+@article{i, title = {I}, doi = {{10.1000/wrapped}}, url = {{https://journal.example.com/wrapped}}}
+@article{sentinel, title = {Sentinel}, doi = {10.1000/sentinel}}`;
+    const { papers, warnings } = parseBibTeX(file);
+
+    expect(warnings).toEqual([]);
+    expect(papers.map((paper) => [paper.title, paper.doi, paper.journal_url, paper.pmid])).toEqual([
+      ["A", String.raw`10.1000/a\textbraceleft{}b`, null, null],
+      ["B", String.raw`10.1000/a\textbraceright{}b`, null, null],
+      ["C", String.raw`10.1000/a\textbackslash{}b`, null, null],
+      ["D", String.raw`10.1000/\textbackslash{}\textbraceleft{}\textbraceright{}\textbraceleft{}`, null, null],
+      ["E", String.raw`10.1002/(SICI)1097-4636(199706)35:4<487::AID-JBM9\textbraceright{}>3.0.CO;2-K`, null, null],
+      ["F", null, "https://doi.org/10.1000/456%23789", null],
+      // The WHATWG URL parser keeps \ { } as they are in a query and a fragment.
+      ["G", null, String.raw`https://journal.example.com/article?id=7&q=\textbraceleft{}x\textbraceright{}#\textbackslash{}`, null],
+      ["H", null, "https://example.com/a%20b?c=%7Bd%7D", null],
+      ["I", "10.1000/wrapped", "https://journal.example.com/wrapped", null],
+      ["Sentinel", "10.1000/sentinel", null, null],
+    ]);
+  });
+
+  it("never lets a PaperLume field replace a standard DOI or URL", () => {
+    const after = String.raw`@article{conflict,
+  title = {Conflict},
+  doi = {10.1000/standard},
+  paperlume-doi-v1 = {10.1000/other\textbraceright{}},
+  url = {https://journal.example.com/standard},
+  paperlume-url-v1 = {https://other.example/\textbraceright{}}
+}`;
+    const before = String.raw`@article{conflict,
+  title = {Conflict},
+  PaperLume-DOI-v1 = {10.1000/other\textbraceright{}},
+  doi = {10.1000/standard},
+  paperlume-url-v1 = {https://other.example/\textbraceright{}},
+  url = {https://journal.example.com/standard}
+}`;
+    for (const file of [after, before]) {
+      expect(parseBibTeX(file).papers[0]).toMatchObject({
+        doi: "10.1000/standard",
+        journal_url: "https://journal.example.com/standard",
+        pmid: null,
+      });
+    }
+  });
+
+  it("ignores a malformed PaperLume field, and nothing else", () => {
+    const file = String.raw`@article{m1, title = {M1}, paperlume-doi-v1 = {10.1000/x\textbraceright}}
+@article{m2, title = {M2}, paperlume-doi-v1 = {10.1000/{x}}}
+@article{m3, title = {M3}, paperlume-doi-v2 = {10.1000/v2}}
+@article{m4, title = {M4}, paperlume-url-v1 = {https://pubmed.ncbi.nlm.nih.gov/33333333/{x}}}
+@article{m5, title = {M5}, paperlume-url-v1 = {https://journal.example.com/a\textasciitilde{}}}
+@article{sentinel, title = {Sentinel}, author = {Sentinel}, doi = {10.1000/sentinel}}`;
+    const { papers, warnings } = parseBibTeX(file);
+
+    expect(warnings).toEqual([]);
+    expect(papers.map((paper) => [paper.title, paper.doi, paper.journal_url, paper.pmid, paper.pubmed_url])).toEqual([
+      ["M1", null, null, null, null],
+      ["M2", null, null, null, null],
+      ["M3", null, null, null, null],
+      ["M4", null, null, null, null],
+      ["M5", null, null, null, null],
+      ["Sentinel", "10.1000/sentinel", null, null, null],
+    ]);
+    expect(papers[5].authors).toEqual(["Sentinel"]);
+  });
+
+  it("checks a URL from its PaperLume field exactly as one from the url field", () => {
+    const pick = (file: string) => {
+      const [paper] = parseBibTeX(file).papers;
+      return { pmid: paper.pmid, pubmed_url: paper.pubmed_url, journal_url: paper.journal_url };
+    };
+    const CASES: ReadonlyArray<readonly [url: string, expected: ReturnType<typeof pick>]> = [
+      [
+        "https://pubmed.ncbi.nlm.nih.gov/12345678/?q={x}",
+        { pmid: "12345678", pubmed_url: "https://pubmed.ncbi.nlm.nih.gov/12345678/", journal_url: null },
+      ],
+      ["https://journal.example.com/a?q={x}", { pmid: null, pubmed_url: null, journal_url: "https://journal.example.com/a?q={x}" }],
+      ["https://doi.org/10.1000/x", { pmid: null, pubmed_url: null, journal_url: "https://doi.org/10.1000/x" }],
+      ["javascript:alert({x})", { pmid: null, pubmed_url: null, journal_url: null }],
+      ["data:text/html,{x}", { pmid: null, pubmed_url: null, journal_url: null }],
+    ];
+
+    for (const [url, expected] of CASES) {
+      const payload = url.replace(/[{}]/g, (brace) => (brace === "{" ? LB : RB));
+      expect(pick(`@article{k, title = {T}, url = {${url}}}`), url).toEqual(expected);
+      expect(pick(`@article{k, title = {T}, paperlume-url-v1 = {${payload}}}`), url).toEqual(expected);
+    }
+
+    // The explicit pmid field still outranks a PubMed URL, wherever the URL came from.
+    expect(
+      pick(String.raw`@article{k, title = {T}, pmid = {11111111},
+  paperlume-url-v1 = {https://pubmed.ncbi.nlm.nih.gov/22222222/?q=\textbraceright{}}}`),
+    ).toEqual({ pmid: "11111111", pubmed_url: "https://pubmed.ncbi.nlm.nih.gov/11111111/", journal_url: null });
   });
 });
 
@@ -575,8 +751,15 @@ describe("repeated export and import cycles are stable", () => {
     expect(first.back.map((paper) => [paper.title, paper.abstract, paper.doi, paper.keywords])).toEqual(
       original.map((paper) => [paper.title, paper.abstract, paper.doi, paper.keywords]),
     );
+    expect(first.back[1].journal_url).toBe("https://example.com/?q=}");
     expect(third.file).toBe(second.file);
-    // No escaping accumulates from one cycle to the next.
+    // The exceptional DOI and link stay in their PaperLume fields on every
+    // cycle, and no escaping accumulates from one cycle to the next.
+    for (const { file } of [first, second, third]) {
+      expect(file).toContain(`  paperlume-doi-v1 = {10.1000/x${RB}}`);
+      expect(file).toContain(`  paperlume-url-v1 = {https://example.com/?q=${RB}}`);
+      expect(file).not.toMatch(/^ {2}doi\s/m);
+    }
     expect(second.file).not.toContain(String.raw`\textbackslash{}textbackslash`);
   });
 });

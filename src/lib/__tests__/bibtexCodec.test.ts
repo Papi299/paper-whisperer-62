@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   decodeBibTeXText,
-  decodeBibTeXVerbatim,
   encodeBibTeXText,
-  encodeBibTeXVerbatim,
+  readIdentifierField,
   stripOuterBraces,
+  writeIdentifierField,
 } from "../bibtexCodec";
 
 /**
@@ -17,7 +17,11 @@ import {
  * - BibTeX's brace rule from `bibtex.web`: every brace counts, a backslash
  *   before it changes nothing, and a field ends where the count returns to
  *   zero (`bibtexFieldEnd` below is an independent transcription of it);
- * - biblatex's verbatim fields, which are read raw, for `doi` and `url`.
+ * - biblatex's verbatim fields, which are read raw, for `doi` and `url`;
+ * - the grammar of the PaperLume identifier fields, version 1, as specified in
+ *   `docs/dependency-security.md`: `\`, `{` and `}` written as
+ *   `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}`, and
+ *   nothing else allowed.
  *
  * Round trips are checked as well. They are never the only check, because an
  * encoder and a decoder can share a wrong assumption and still agree.
@@ -340,78 +344,227 @@ describe("stripOuterBraces removes only a pair that encloses the whole value", (
   });
 });
 
-// ── Verbatim fields ──
+// ── DOI and URL ──
 
-describe("encodeBibTeXVerbatim writes DOIs and URLs as stored", () => {
+/**
+ * Whether one brace pair encloses the whole trimmed value, every brace
+ * counting. A verbatim field has no escapes, so this is BibTeX's own pairing
+ * (`bibtexFieldEnd`), and a reader strips such a pair.
+ */
+function enclosedByOnePair(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.startsWith("{") && bibtexFieldEnd(trimmed, 0) === trimmed.length - 1;
+}
+
+/** The PaperLume field names, written out here rather than imported. */
+const PAPERLUME_FIELD = { doi: "paperlume-doi-v1", url: "paperlume-url-v1" } as const;
+const IDENTIFIER_FIELDS = ["doi", "url"] as const;
+
+const LB = String.raw`\textbraceleft{}`;
+const RB = String.raw`\textbraceright{}`;
+const BK = String.raw`\textbackslash{}`;
+
+describe("a DOI or URL is written raw in its standard field", () => {
   const RAW: readonly string[] = [
     "10.1056/NEJMoa2107934",
     "10.1000/456#789",
     "10.1000/foo/bar",
     "10.1002/(SICI)1097-4636(199706)35:4<487::AID-JBM9>3.0.CO;2-K",
     "10.1000/a{b}c",
+    "10.1000/{a}{b}",
     "10.1000/50%off_$x&y~z^w",
     String.raw`10.1000/a\b`,
+    String.raw`10.1000/\{a}`,
+    // Text that looks like a token is written as it is, because the standard
+    // field is never decoded.
+    `10.1000/a${LB}b`,
+    `10.1000/a${RB}b`,
+    `10.1000/a${BK}b`,
+    `10.1000/${BK}${LB}${RB}${LB}${RB}`,
     "https://doi.org/10.1000/456%23789",
     "https://doi.org/10.1000/foo%2Fbar",
     "https://pubmed.ncbi.nlm.nih.gov/12345678/",
     "https://journal.example.com/article?id=7&x=%20y#section-2",
     "https://example.com/search?q={x}#f{y}",
+    `https://example.com/search?q=${LB}`,
   ];
 
   for (const value of RAW) {
-    it(`writes ${value} byte for byte`, () => {
-      expect(encodeBibTeXVerbatim(value)).toBe(value);
-      expect(decodeBibTeXVerbatim(stripOuterBraces(value)).trim()).toBe(value);
+    it(`writes and reads ${value} byte for byte`, () => {
+      for (const field of IDENTIFIER_FIELDS) {
+        expect(writeIdentifierField(field, value)).toEqual({ name: field, value });
+        expect(readIdentifierField({ [field]: value }, field)).toBe(value);
+      }
     });
   }
 
   it("does not LaTeX-escape or percent-encode anything", () => {
     const value = "https://example.com/a_b?c=50%25&d=#e";
-    expect(encodeBibTeXVerbatim(value)).toBe(value);
-    expect(encodeBibTeXVerbatim(value)).not.toContain(BS);
-    expect(encodeBibTeXVerbatim(value)).not.toContain("%2525");
+    expect(writeIdentifierField("url", value)).toEqual({ name: "url", value });
   });
 });
 
-describe("encodeBibTeXVerbatim encodes only a value that cannot be written raw", () => {
-  const ENCODED: ReadonlyArray<readonly [string, string]> = [
-    // Braces that do not balance would end the field early or run past it.
-    ["10.1000/x}", String.raw`10.1000/x\textbraceright{}`],
-    ["10.1000/x{", String.raw`10.1000/x\textbraceleft{}`],
-    ["https://example.com/search?q=}", String.raw`https://example.com/search?q=\textbraceright{}`],
-    ["https://example.com/search?q={", String.raw`https://example.com/search?q=\textbraceleft{}`],
-    // A value wrapped in one pair would lose it to the importer's stripping.
-    ["{10.1000/x}", String.raw`\textbraceleft{}10.1000/x\textbraceright{}`],
-    // Text that would read back as a verbatim token. Every backslash and brace
-    // is then written as a token, so the value decodes exactly.
-    [
-      String.raw`10.1000/a\textbraceleft{}b`,
-      String.raw`10.1000/a\textbackslash{}textbraceleft\textbraceleft{}\textbraceright{}b`,
-    ],
+describe("a standard DOI or URL field is read raw, whoever wrote it", () => {
+  // Values another tool may have written. Text that looks like LaTeX, or like
+  // a PaperLume token, is part of the DOI or URL.
+  const THIRD_PARTY: readonly string[] = [
+    `10.1000/a${LB}b`,
+    `10.1000/a${RB}b`,
+    `10.1000/a${BK}b`,
+    `10.1000/${BK}${LB}${RB}${LB}`,
+    `10.1000/x${BK}textbraceright{}`,
+    `10.1002/(SICI)1097-4636(199706)35:4<487::AID-JBM9${RB}>3.0.CO;2-K`,
+    String.raw`10.1000/a\_b`,
+    String.raw`10.1000/caf\'e`,
+    String.raw`\textasciitilde{}`,
+    String.raw`\textbackslash\{\}`,
+    `https://journal.example.com/a?q=${LB}x${RB}`,
+    `https://journal.example.com/a#${BK}`,
   ];
 
-  for (const [value, expected] of ENCODED) {
-    it(`encodes ${value}`, () => {
-      const encoded = encodeBibTeXVerbatim(value);
-      expect(encoded).toBe(expected);
-      expect(isOneField(encoded)).toBe(true);
-      expect(decodeBibTeXVerbatim(stripOuterBraces(encoded)).trim()).toBe(value);
+  for (const value of THIRD_PARTY) {
+    it(`reads ${value} as written`, () => {
+      for (const field of IDENTIFIER_FIELDS) {
+        expect(readIdentifierField({ [field]: value }, field)).toBe(value);
+      }
     });
   }
 
-  it("reads back any value, raw or encoded, as the trimmed stored value", () => {
-    for (const value of randomValues(0xd01, 3000, 14)) {
-      const encoded = encodeBibTeXVerbatim(value);
-      expect(isOneField(encoded), JSON.stringify(value)).toBe(true);
-      expect(decodeBibTeXVerbatim(stripOuterBraces(encoded)).trim(), JSON.stringify(value)).toBe(value.trim());
-    }
+  it("removes brace pairs that enclose the whole value, and trims it, as before", () => {
+    expect(readIdentifierField({ doi: "{10.1000/x}" }, "doi")).toBe("10.1000/x");
+    expect(readIdentifierField({ doi: "{{10.1000/x}}" }, "doi")).toBe("10.1000/x");
+    expect(readIdentifierField({ doi: "  10.1000/x \n" }, "doi")).toBe("10.1000/x");
+    expect(readIdentifierField({ url: "{https://example.com/a?q={x}}" }, "url")).toBe("https://example.com/a?q={x}");
   });
 
-  it("reads only its own three tokens, so other backslash text is kept", () => {
-    // A third-party file that escaped an underscore in its DOI field keeps the
-    // escape, as before: verbatim fields are not LaTeX-decoded.
-    expect(decodeBibTeXVerbatim(String.raw`10.1000/a\_b`)).toBe(String.raw`10.1000/a\_b`);
-    expect(decodeBibTeXVerbatim(String.raw`\textasciitilde{}`)).toBe(String.raw`\textasciitilde{}`);
-    expect(decodeBibTeXVerbatim(String.raw`\textbackslash\{\}`)).toBe(String.raw`\textbackslash\{\}`);
+  it("pairs braces with a backslash as an ordinary character", () => {
+    // A verbatim field has no escapes. `{10.1000/x\}` is one pair around
+    // `10.1000/x\`, as the importer has always read it. Reading `\}` as an
+    // escaped brace, as TeX does in a text field, would keep the pair and
+    // change the DOI.
+    expect(readIdentifierField({ doi: String.raw`{10.1000/x\}` }, "doi")).toBe(`10.1000/x${BS}`);
+    expect(readIdentifierField({ doi: String.raw`{a\{}}` }, "doi")).toBe(String.raw`a\{}`);
+  });
+
+  it("leaves two separate groups alone", () => {
+    // The one difference from the importer before this codec, which read this
+    // as `a}{b`.
+    expect(readIdentifierField({ doi: "{a}{b}" }, "doi")).toBe("{a}{b}");
+  });
+
+  it("gives nothing for a missing or empty field, as before", () => {
+    expect(readIdentifierField({}, "doi")).toBeNull();
+    expect(readIdentifierField({ doi: "" }, "doi")).toBeNull();
+    expect(readIdentifierField({ doi: "{}" }, "doi")).toBe("");
+  });
+});
+
+describe("a value its standard field cannot hold goes to the PaperLume field", () => {
+  const EXCEPTIONAL: ReadonlyArray<readonly [field: "doi" | "url", value: string, payload: string]> = [
+    // Braces that do not balance would end the field early or run past it.
+    ["doi", "10.1000/x}", `10.1000/x${RB}`],
+    ["doi", "10.1000/x{", `10.1000/x${LB}`],
+    ["doi", "10.1000/}{", `10.1000/${RB}${LB}`],
+    ["doi", "10.1000/x}, title = {Injected", `10.1000/x${RB}, title = ${LB}Injected`],
+    // A value wrapped in one pair would lose the pair when read back.
+    ["doi", "{10.1000/x}", `${LB}10.1000/x${RB}`],
+    ["doi", String.raw`{10.1000/x\}`, `${LB}10.1000/x${BK}${RB}`],
+    // Token-like text in such a value is written as text, so it reads back as text.
+    ["doi", `10.1000/a${LB}b}`, `10.1000/a${BK}textbraceleft${LB}${RB}b${RB}`],
+    ["url", "https://example.com/search?q=}", `https://example.com/search?q=${RB}`],
+    ["url", "https://example.com/search?q={", `https://example.com/search?q=${LB}`],
+    // An existing percent-escape is not touched.
+    ["url", "https://example.com/a?q=%7B}#{", `https://example.com/a?q=%7B${RB}#${LB}`],
+    ["url", `https://example.com/a?q=${BS}}`, `https://example.com/a?q=${BK}${RB}`],
+  ];
+
+  for (const [field, value, payload] of EXCEPTIONAL) {
+    it(`writes ${field} ${JSON.stringify(value)} to ${PAPERLUME_FIELD[field]} and reads it back`, () => {
+      const written = writeIdentifierField(field, value);
+      expect(written).toEqual({ name: PAPERLUME_FIELD[field], value: payload });
+      expect(isOneField(written.value)).toBe(true);
+      expect(readIdentifierField({ [written.name]: written.value }, field)).toBe(value);
+    });
+  }
+
+  it("chooses the field by the value's braces alone, and reads every value back", () => {
+    for (const value of randomValues(0xd01, 3000, 14)) {
+      const raw = isOneField(value) && !enclosedByOnePair(value);
+      for (const field of IDENTIFIER_FIELDS) {
+        const written = writeIdentifierField(field, value);
+        expect(written.name, JSON.stringify(value)).toBe(raw ? field : PAPERLUME_FIELD[field]);
+        if (raw) expect(written.value, JSON.stringify(value)).toBe(value);
+        expect(isOneField(written.value), JSON.stringify(value)).toBe(true);
+        expect(readIdentifierField({ [written.name]: written.value }, field), JSON.stringify(value)).toBe(value.trim());
+      }
+    }
+  });
+});
+
+describe("the PaperLume field is read only when the standard field has no value", () => {
+  it("keeps the standard value over a conflicting PaperLume field", () => {
+    const dois = { doi: "10.1000/standard", [PAPERLUME_FIELD.doi]: `10.1000/other${RB}` };
+    expect(readIdentifierField(dois, "doi")).toBe("10.1000/standard");
+    const urls = { url: "https://journal.example.com/a", [PAPERLUME_FIELD.url]: `https://other.example/${RB}` };
+    expect(readIdentifierField(urls, "url")).toBe("https://journal.example.com/a");
+  });
+
+  it("reads the PaperLume field when the standard field is missing or empty", () => {
+    const payload = `10.1000/x${RB}`;
+    expect(readIdentifierField({ [PAPERLUME_FIELD.doi]: payload }, "doi")).toBe("10.1000/x}");
+    expect(readIdentifierField({ doi: "", [PAPERLUME_FIELD.doi]: payload }, "doi")).toBe("10.1000/x}");
+    expect(readIdentifierField({ doi: "{ }", [PAPERLUME_FIELD.doi]: payload }, "doi")).toBe("10.1000/x}");
+  });
+
+  it("reads only its own field name, at this version", () => {
+    const payload = `10.1000/x${RB}`;
+    for (const name of ["paperlume-doi-v2", "paperlume-doi-v0", "paperlume-doi", "x-paperlume-doi-v1", "doi-v1"]) {
+      expect(readIdentifierField({ [name]: payload }, "doi"), name).toBeNull();
+    }
+    expect(readIdentifierField({ [PAPERLUME_FIELD.url]: payload }, "doi")).toBeNull();
+    expect(readIdentifierField({ [PAPERLUME_FIELD.doi]: payload }, "url")).toBeNull();
+  });
+});
+
+describe("a PaperLume field must match its grammar exactly", () => {
+  const MALFORMED: ReadonlyArray<readonly [label: string, payload: string]> = [
+    ["a raw closing brace", "10.1000/x}"],
+    ["a raw opening brace", "10.1000/{x"],
+    ["a raw brace pair inside it", "10.1000/{x}y"],
+    ["a lone backslash", `10.1000/x${BS}`],
+    ["a backslash before a brace", String.raw`10.1000/\{x\}`],
+    ["a token without its group", String.raw`10.1000/x\textbraceright`],
+    ["a token with text in its group", String.raw`10.1000/x\textbraceright{y}`],
+    ["another LaTeX symbol", String.raw`10.1000/\textasciitilde{}`],
+    ["an accent", String.raw`10.1000/caf\'e`],
+    ["the legacy text form of a backslash", String.raw`10.1000/\textbackslash\{\}`],
+    ["a valid token followed by a stray brace", `10.1000/${LB}}`],
+  ];
+
+  for (const [label, payload] of MALFORMED) {
+    it(`ignores a field with ${label}`, () => {
+      expect(readIdentifierField({ [PAPERLUME_FIELD.doi]: payload }, "doi")).toBeNull();
+      expect(readIdentifierField({ [PAPERLUME_FIELD.url]: payload }, "url")).toBeNull();
+    });
+  }
+
+  it("removes a pair that encloses the whole field before decoding it", () => {
+    // A tool may wrap every value in braces. A valid value never starts with a
+    // brace, so removing an enclosing pair changes nothing else.
+    expect(readIdentifierField({ [PAPERLUME_FIELD.doi]: `{10.1000/x${RB}}` }, "doi")).toBe("10.1000/x}");
+  });
+
+  it("reads each token once, from the field as written", () => {
+    expect(readIdentifierField({ [PAPERLUME_FIELD.doi]: `10.1000/${BK}textbraceright${LB}${RB}` }, "doi")).toBe(
+      `10.1000/${RB}`,
+    );
+  });
+
+  it("decodes a long field in one pass, and rejects it whole for one stray brace", () => {
+    const value = `10.1000/${"}{".repeat(100_000)}`;
+    const written = writeIdentifierField("doi", value);
+    expect(written.name).toBe(PAPERLUME_FIELD.doi);
+    expect(readIdentifierField({ [written.name]: written.value }, "doi")).toBe(value);
+    expect(readIdentifierField({ [written.name]: `${written.value}}` }, "doi")).toBeNull();
   });
 });
