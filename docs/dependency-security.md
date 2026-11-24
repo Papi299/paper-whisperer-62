@@ -713,7 +713,7 @@ Each is separate work. Only the BibTeX item has started:
 
 ## BibTeX codec and record integrity (CodeQL Q1)
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. Until it merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrects that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). Until the fix merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
 
 | CodeQL alerts | Rule | Location on `a110b4ce` | Triage classification |
 |---|---|---|---|
@@ -747,10 +747,10 @@ A shared module, `src/lib/bibtexCodec.ts`, holds both directions, so the tokens 
   - `\` → `\textbackslash{}`, where the old chain wrote `\textbackslash\{\}`. The other tokens are as before: `&` → `\&` (likewise `%`, `$`, `#` and `_`), `~` → `\textasciitilde{}` and `^` → `\textasciicircum{}`.
   - A brace whose partner is in the same value is still written `\{` or `\}`, so balanced braces such as `{HIV}` come out byte for byte as before. A brace with no partner is written `\textbraceleft{}` or `\textbraceright{}`. These are LaTeX text symbols, available by default since the February 2020 release, and biber's recode table maps them to `{` and `}`. Zotero's BibTeX exporter draws the same line between paired and unpaired braces, using `\vphantom` for the unpaired ones.
   - Authors and keywords are encoded one element at a time, so a brace pair never spans two names. BibTeX splits a name list only at an " and " outside braces.
-- **`doi` and `url` stay verbatim.** biblatex reads `doi` as a verbatim field and `url` as a URI field (manual 3.22a, §2.2.1 and §2.2.2), so a LaTeX escape there would change the identifier for any tool that reads it.
-  - A value is written raw unless the importer could not read it back from the raw text: its braces do not balance, one brace pair encloses all of it, or it contains one of the three verbatim tokens.
-  - Only then are `\`, `{` and `}` written as `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}`. The importer decodes those three tokens in these fields and nothing else.
-  - Every other DOI and URL is written byte for byte as before, including `10.1000/456#789` and `https://doi.org/10.1000/456%23789`. Nothing is percent-encoded or LaTeX-escaped.
+- **`doi` and `url` stay raw, in both directions.** biblatex reads `doi` as a verbatim field and `url` as a URI field (manual 3.22a, §2.2.1 and §2.2.2). The characters in those fields are the identifier for every tool that reads them, so nothing is escaped or decoded there.
+  - The importer reads them as `main` does: brace pairs that enclose the whole value are removed, the value is trimmed, and nothing is decoded. Text such as `\textbraceleft{}` in another tool's DOI is part of the DOI.
+  - The exporter writes every DOI and URL raw whose braces balance and that is not wrapped in one pair. These come out byte for byte as before, including `10.1000/456#789`, `https://doi.org/10.1000/456%23789` and a DOI that contains `\textbraceleft{}`. Nothing is percent-encoded or LaTeX-escaped.
+  - A value that cannot be written raw goes to a PaperLume field instead, and the standard field is left out. See [DOI and URL fields](#doi-and-url-fields).
 - **Decoding** scans the original input left to right and decodes each recognized token once. Each character is either part of one token or copied once, so a decoded `\` cannot combine with the text after it.
   - The accent table and its supported forms are unchanged: `{\'e}`, `{\'{e}}`, `\'e` and `\'{e}` for every accent and letter in the table, `\c{c}`, `\v{s}`, and `\ss`, `\aa`, `\ae`, `\AE`, `\o` and `\O`.
   - An accent's letter braces must now come as a pair, so an accent no longer takes an enclosing group's brace.
@@ -768,16 +768,68 @@ A shared module, `src/lib/bibtexCodec.ts`, holds both directions, so the tokens 
 | `journal`, `abstract` | Text | Text encoding |
 | `keywords` | List of text | Each keyword text-encoded, joined with ", " |
 | `note` | Text | `Study type: ` followed by the text encoding |
-| `doi` | Identifier | Verbatim |
+| `doi` | Identifier | Raw. Left out when the DOI cannot be written raw |
+| `paperlume-doi-v1` | Identifier | Only for a DOI that cannot be written raw, in the version 1 encoding |
 | `pmid` | Identifier | Only a valid PMID, as digits, unchanged |
-| `url` | URL | Verbatim, chosen by `exportUrlFor` with unchanged precedence |
+| `url` | URL | Raw, chosen by `exportUrlFor` with unchanged precedence. Left out when the URL cannot be written raw |
+| `paperlume-url-v1` | URL | Only for a URL that cannot be written raw, in the version 1 encoding |
 
 PMID authority on import is unchanged. It comes from an explicit `pmid` field first, then from a structurally recognized PubMed record URL in `url`, then from one in `note`.
 
+### DOI and URL fields
+
+**What the review found.** The first version of this fix (Draft commit `58be86c1`) decoded the three tokens `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}` in every `doi` and `url` field, whoever wrote the file. A DOI or URL from another tool that contains that text was therefore imported as a different identifier. These results come from the real parsers on synthetic fixtures. None of the DOIs is registered.
+
+| Field as another tool wrote it | `main` `a110b4ce` reads | Draft `0fd89d8c` read | Now reads |
+|---|---|---|---|
+| `doi = {10.1000/a\textbraceleft{}b}` | `10.1000/a\textbraceleft{}b` | `10.1000/a{b` | `10.1000/a\textbraceleft{}b` |
+| `doi = {10.1000/a\textbraceright{}b}` | `10.1000/a\textbraceright{}b` | `10.1000/a}b` | `10.1000/a\textbraceright{}b` |
+| `doi = {10.1000/a\textbackslash{}b}` | `10.1000/a\textbackslash{}b` | `10.1000/a\b` | `10.1000/a\textbackslash{}b` |
+| `url = {https://example.org/a?q=\textbraceleft{}}` | link `https://example.org/a?q=\textbraceleft{}` | link `https://example.org/a?q={` | link `https://example.org/a?q=\textbraceleft{}` |
+
+The importer could not tell such a field from one the exporter had encoded, because both looked the same. The Draft also wrote an unbalanced DOI such as `10.1000/x}` as `doi = {10.1000/x\textbraceright{}}`. That file is valid BibTeX, and the Draft read the DOI back. Any tool that reads `doi` verbatim, including `main`'s importer, reads `10.1000/x\textbraceright{}` instead, which is a different DOI.
+
+Such text cannot be ruled out as part of a DOI. The DOI Handbook (September 2025, "Syntax of the DOI name", p. 37) lets a DOI name use any Unicode graphic character, punctuation included. A registration agency may choose a narrower set ("Avoiding and resolving ambiguities", pp. 40–41), but the standard does not require one.
+
+**Options compared** for a value that cannot be written raw:
+
+| Option | Standard field | Other tools | PaperLume round trip | Decision |
+|---|---|---|---|---|
+| A. Encode the standard field and add a marker saying so | Holds the encoded text | Read a different DOI or URL | Exact | Rejected: the standard field still misleads every other reader |
+| B. Move the value to a PaperLume field | Left out | See no DOI or URL for that record | Exact | **Chosen** |
+| C. Percent-encode the braces of a URL | Holds changed bytes | Usually get a working link | The stored link changes | Rejected, see below |
+| D. Leave the value out and tell the user | Left out | See no DOI or URL | Lost | Rejected: it needs a product decision and a UI change |
+
+Option C would apply only to URLs, and only to some of them. The exporter's link has already been through the WHATWG URL serializer, which percent-encodes braces in a path and in user information. A raw brace can remain only in a query, a fragment or a host, where the WHATWG URL Standard keeps it raw. RFC 3986 allows `{` and `}` in a URI only percent-encoded (§2.1–2.3), but it treats a percent-encoded octet as equivalent only for unreserved characters (§6.2.2.2). Encoding a brace in a query therefore changes the bytes a server receives, and encoding one in a fragment changes what a page script reads. Neither is provably the same destination, and the importer would then store the changed link.
+
+**The contract.**
+
+- **Standard fields.** `doi` and `url` are written raw and read raw, never decoded. A value is written there when its braces balance, every brace counting, and no single pair encloses all of it after trimming. Then the importer reads back exactly the trimmed value.
+- **PaperLume fields.** Any other value is written to `paperlume-doi-v1` or `paperlume-url-v1`, in the place the standard field would take, and the standard field is not written. In the value, `\`, `{` and `}` are written as `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}`, and nothing else changes.
+- **Grammar, version 1.** Enclosing brace pairs are removed and the value is trimmed, as for the standard field. What remains must be a sequence of characters other than `\`, `{` and `}`, and those three tokens. Anything else makes the field malformed, including another LaTeX command, a lone backslash, a raw brace or a token without its `{}`. A malformed field is ignored as a whole, never read in part. Each token is decoded once.
+- **Names.** Only these two exact names are read. BibTeX compares field names without regard to case, and `bibtex.web` allows hyphens and digits in them. A field with another version or another name is ignored.
+- **Precedence.** A standard field with a value always wins. The PaperLume field is read only when the standard field is missing or empty, so it can never replace a DOI or URL that another tool reads.
+- **No trust.** The field name is not provenance or authentication, since any file can contain it. A value read from a PaperLume field goes through the same checks as the standard field's:
+  - a URL gives a PMID only through structural PubMed recognition;
+  - an explicit `pmid` field still outranks it;
+  - it is stored as a link only if it is an http(s) URL.
+
+  A malformed field gives no DOI, no link and no PMID.
+- **Bounded.** Decoding is one linear pass. A 1 MB field of tokens decodes in about 23 ms, and a malformed one of the same size is rejected in about the same time.
+
+**Which values move.** Only a stored DOI or link whose braces do not balance, or that one pair encloses completely, goes to a PaperLume field. The DOI resolver URL is percent-encoded, so it is always written raw. A PubMed link contains only digits. A journal link can keep a raw brace only in its query, fragment or host. In the 3,000-record synthetic corpus below, 467 of the 5,754 DOIs and links moved, because the corpus deliberately includes such values. Production data was not examined.
+
+**Brace pairs in verbatim fields.** A backslash is an ordinary character in `doi` and `url`, so enclosing pairs are found the way BibTeX pairs braces, with every brace counting. The first version paired them the TeX way there as well. That changed 5,572 of 100,007 random brace-balanced values relative to `main`: for example, `{10.1000/x\}` kept its braces instead of becoming `10.1000/x\`. In these fields the only remaining difference from `main` is the approved one: separate groups such as `{a}{b}` are no longer taken for one enclosing pair. Text fields keep the TeX pairing.
+
+**Other tools.** Standard BibTeX styles ignore a field they do not declare. `bibtex.web` stores only the fields a style declares, and btxdoc says BibTeX ignores any field that is not required or optional. biber's manual states that in tool mode, fields outside the data model are neither read nor output. So a tool that drops unknown fields shows no DOI or URL for a record whose value moved. A tool that keeps them shows the PaperLume field with its tokens. If a tool drops the field and the file comes back, PaperLume reads no DOI for that record. A DOI resolver link in `url`, which is always written raw, survives. biblatex URI-escapes a `url` field that has no `%` when it prints it; that happens in biblatex, and the field itself still carries the stored link.
+
+**Older and Draft-only files.** Older Paperlume exports wrote `doi` and `url` raw, and they are read as before. The first version's encoded standard fields were never released, so they are not supported: such a field is now read as its literal text. No unconditional decoding remains in these fields.
+
 ### Compatibility
 
-- **Ordinary records are unchanged.** A record with no backslash, no unpaired brace and no unwritable DOI or URL is written byte for byte as before. A test pins one such record to the old exporter's output.
-- **Files from other tools.** Over 200,000 random inputs, the new decoder differed from the old on 91, all in three intended classes:
+- **Ordinary records are unchanged.** A record whose text values have no backslash and no unpaired brace, and whose DOI and URL can be written raw, is written byte for byte as before. A test pins one such record to the old exporter's output. In the synthetic corpus, all 5,287 `doi` and `url` lines the exporter writes are byte-identical to `main`'s, and 467 other values moved to a PaperLume field.
+- **DOI and URL fields from other tools** are read as `main` reads them. Over 114,650 random `doi` fields and 114,650 random `url` fields parsed by the real importers, the only difference was 2,967 `doi` values made of separate groups, the approved change above. The first version differed from `main` on 71,174 and 68,099 of them.
+- **Text fields from other tools.** Over 200,000 random inputs, the new decoder differed from the old on 91, all in three intended classes:
   - an accent no longer takes a following brace;
   - an accent with an unclosed brace, such as `\'{e`, is no longer decoded;
   - decoded text is not read again, so `\o{\'x}` gives `øx`, not `\ox`.
@@ -790,22 +842,50 @@ PMID authority on import is unchanged. It comes from an explicit `pmid` field fi
 
 ### Evidence
 
-- **Tests.** Two new files hold 167 tests:
-  - `src/lib/__tests__/bibtexCodec.test.ts` (111) checks the codec against expectations written from LaTeX's and BibTeX's rules, including every accent in the table in all four forms, and against an independent transcription of BibTeX's brace rule;
-  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (56) checks real exports with an independent reader of BibTeX entry structure. It covers entry counts and field names, injection fixtures, DOI and URL recovery, scientific text, repeated cycles, older exports, hand-written files in other tools' styles and malformed input.
-  - On the old code, 23 of the 111 and 25 of the 56 fail, each for the defect it targets.
-- **Negative controls.** 22 weakened copies of the new code each fail the new suites. The existing BibTeX suites alone catch 6 of them: writing DOI names as resolver URLs, percent-encoding URLs twice, breaking one accent, dropping the braced-accent rule, and losing or merging a record.
-- **Other formats.** For 3,000 synthetic records, CSV and RIS output is byte-identical to the old code's (418,241 and 751,711 bytes).
+- **Tests.** Two new files hold 219 tests. The revision added 52 of them.
+  - `src/lib/__tests__/bibtexCodec.test.ts` (155) checks the codec against expectations written from LaTeX's and BibTeX's rules, including every accent in the table in all four forms, and against an independent transcription of BibTeX's brace rule. For DOIs and URLs it checks:
+    - raw values, including token-like text, and third-party values that must not be decoded;
+    - values that move to a PaperLume field, each with its payload written out by hand;
+    - the field choice and the round trip over 3,000 random values;
+    - precedence and versions, and malformed payloads.
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (64) checks real exports with an independent reader of BibTeX entry structure, whose field names follow `bibtex.web`'s identifier rule. It covers:
+    - entry counts and field names, injection fixtures, and DOI and URL recovery;
+    - unmarked files from other tools with token-like DOIs and URLs;
+    - conflicting and malformed PaperLume fields;
+    - PaperLume URLs checked exactly as `url` is, and several exceptional identifiers before a sentinel record;
+    - scientific text, repeated cycles, older exports, hand-written files in other tools' styles and malformed input.
+  - The first version's tests that wrote the encoded value into `doi` or `url`, or decoded tokens there, were rewritten for the corrected contract. No other assertion changed.
+  - On `main`, 29 of the 64 integration tests fail. On the first version, 16 of them fail: the token-like third-party values, the encoded standard fields and the PaperLume URL checks. The codec suite's 65 DOI and URL tests need functions the first version does not have.
+- **Negative controls.** 31 weakened copies of the code each fail the suites, and unmodified copies pass all 625 tests of the five BibTeX-related files.
+  - 20 of the copies repeat the first version's controls in the approved areas, aimed at the revised code.
+  - 11 are new, for the identifier contract. Each one:
+    - restores the first version's decoding of `doi` and `url`;
+    - decodes them only when the text parses as a payload;
+    - ignores the PaperLume field;
+    - writes the encoded value into the standard field;
+    - lets a PaperLume field override a standard one;
+    - writes an unbalanced value unencoded into the PaperLume field, which breaks the record and the one after it;
+    - reads a malformed payload in part;
+    - accepts any version;
+    - trusts a PaperLume URL without the link check;
+    - pairs verbatim braces the TeX way;
+    - or drops the enclosing-pair check.
+
+  The existing BibTeX suites alone catch 6 of the 31, the same 6 as before, and none of the 11 new ones.
+- **Other formats.** For 3,000 synthetic records, CSV and RIS output is byte-identical to `main`'s and to the first version's: 427,066 and 770,428 bytes. This corpus adds token-like identifiers to the first round's, which gave 418,241 and 751,711 bytes.
+- **Round trip.** The same 3,000 records come back from a BibTeX export exactly as they did from the first version, field for field. All 2,742 DOIs among them are exact. The 54 records skipped both times have a title of white space only.
 - **Build.** No dependency changed, and `package.json` and `package-lock.json` are byte-identical to the base.
-  - The web build's 9 files: 7 are byte-identical, and `index.html` differs only in the entry chunk's name.
-  - The entry chunk grows by 1,439 B (+544 B gzip). Its normalized token diff falls only in the BibTeX exporter, the importer's decoder and the new module.
-  - The URL origins and the inlined environment keys are unchanged.
+  - The web build's 9 files: 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name. That holds against `main` and against the first version.
+  - Against `main`, the entry chunk grows by 1,770 B (+788 B with `gzip -9`), in 99 normalized token hunks. Against the first version it grows by 331 B (+248 B), in 36 hunks. Every hunk falls in the BibTeX exporter, the importer or the codec.
+  - The URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
   - The extension output and its packaged archive are byte-identical.
-- **Not verified.** No BibTeX program, biber, pandoc or reference manager is installed here, and installing one was out of scope. The grammar facts come from reading sources, not from running tools: `bibtex.web` 0.99e, the biblatex 3.22a manual, the LaTeX reference manual's list of text symbols, biber's recode table and Zotero's BibTeX translator. How other tools display `\textbraceleft{}` and `\textbraceright{}`, or the tokens in a verbatim field, was not observed.
+- **Not verified.** No BibTeX program, biber, pandoc or reference manager is installed here, and installing one was out of scope. The grammar facts come from reading sources, not from running tools: `bibtex.web` 0.99e, btxdoc, the biblatex 3.22a manual and its source, the biber manual, the LaTeX reference manual's list of text symbols, biber's recode table, Zotero's BibTeX translator, the DOI Handbook (September 2025), RFC 3986 and the WHATWG URL Standard. Nobody observed how another tool displays `\textbraceleft{}` and `\textbraceright{}`, or what it does with a PaperLume field. If that matters before release, the checks would be:
+  - biber in tool mode with `--validate-datamodel`, to see that it reports and drops `paperlume-doi-v1`;
+  - an import of the same file into Zotero and into JabRef, to see whether each keeps the field.
 
 ### CodeQL
 
-The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. Only an analysis of `main` after a merge can close the alerts. If the alerts close then, the open count would fall from 18 to 10. That is a projection, not a result.
+The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. The revision adds no code of either alert's kind: its encoding is one `replace` with a callback, and its decoder reads each token once. Only an analysis of `main` after a merge can close the alerts. If the alerts close then, the open count would fall from 18 to 10. That is a projection, not a result.
 
 ### Limitations not changed here
 
@@ -829,6 +909,8 @@ Each item is separate work, and none of it is part of this change:
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
 - **CI runtime.** The `e2e-local` lane runs close to its job timeout.
 - **Superseded Dependabot pull requests.** PRs 351–354 are still open.
+- **A notice for moved identifiers.** Whether the export should tell the user when a DOI or link goes to a PaperLume field, which other tools may not show, is a product decision. Nothing in the interface says so now.
+- **External-tool behaviour.** How biber, Zotero and JabRef treat a PaperLume field was not observed; see [Evidence](#evidence).
 
 ## NanoID finding — REMEDIATED
 
