@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is the [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1, whose fix is proposed in a Draft pull request.
 
 ## Current audit state
 
@@ -42,6 +42,8 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 **With the [Zod 4 migration](#zod-4-migration) (2026-11-23).** Its lockfile (`package-lock.json` SHA-256 `48869379…`) measured **0** full and **0** production findings. Dependabot closes an alert only after a change reaches `main`, so alert 16 stayed open until the migration merged. Closing it would leave no open Dependabot alert, but that was a projection, to be re-read after the merge.
 
 **After the Zod 4 migration merged (2026-11-24).** PR #372 merged at 04:43:34 UTC as `cec11199`, and Production `dpl_413PdQNt` was built from it; it was READY at 04:44:02 UTC. On that commit, `npm audit` measured 0 full and 0 production findings, as projected above. Dependabot reported alert 16 fixed at 04:44:17 UTC and opened none, which left **0 open alerts**. CodeQL still showed 18. Re-measured at 07:45 UTC the same day, all of these were unchanged.
+
+**After the CSV export hardening merged (2026-11-24).** PR #373, a first-party change with no dependency delta, merged at 09:40:45 UTC as `a110b4ce` (see [CSV formula injection](#csv-formula-injection-cwe-1236)). Re-measured on that commit at 10:10 UTC: `npm audit` 0 full and 0 production findings after a clean `npm ci`, **0 open Dependabot alerts**, 18 open CodeQL alerts and 0 secret-scanning alerts.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -650,8 +652,8 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
   - All 18 results come from single-file pattern queries. No data-flow query reported anything.
   - The Edge Functions import from `esm.sh`, which CodeQL cannot resolve, so the absence of data-flow results there is weak evidence.
   - The deployed Edge Function bundle was not compared with `main`, and no CodeQL CLI was run locally.
-- **Proposed follow-up repair groups.** Each would be its own bounded PR, and none has started:
-  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15);
+- **Proposed follow-up repair groups.** Each would be its own bounded PR. Only Q1 has started:
+  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1);
   - **Q2**, Edge metadata extraction (alerts 2–5 and 8). It needs an Edge Function deploy;
   - **Q3**, client HTML-entity decoding, plus an app-wide guard against HTML sinks (alert 6);
   - **Q4**, test-oracle hygiene (alerts 1, 16, 17 and 18).
@@ -659,7 +661,7 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 
 ## CSV formula injection (CWE-1236)
 
-**Status: fix proposed, not merged.** The read-only audit `PAPERLUME-SECURITY-CSV-FORMULA-INJECTION-AUDIT-001` classified the finding on 2026-11-24, with the verdict `PAPERLUME_SECURITY_CSV_FORMULA_INJECTION_AUDIT_READY`. `PAPERLUME-SECURITY-CSV-EXPORT-HARDENING-001` (Draft pull request opened 2026-11-24) changes the CSV serializer. Until that pull request merges and deploys, `main` and Production still write the old CSV. This is a first-party finding, not a dependency one.
+**Status: remediated** (`PAPERLUME-SECURITY-CSV-EXPORT-HARDENING-001`). The read-only audit `PAPERLUME-SECURITY-CSV-FORMULA-INJECTION-AUDIT-001` classified the finding on 2026-11-24, with the verdict `PAPERLUME_SECURITY_CSV_FORMULA_INJECTION_AUDIT_READY`. PR #373, which changes the CSV serializer, was opened as a draft that day and merged at 09:40:45 UTC as `a110b4ce`. The merge's tree is the reviewed head's tree (`da7bcfdb`). Production `dpl_EoZNtanyGR9NNThTU6w1tYFZcJvG`, built from that commit, was READY at 09:41:10 UTC. This is a first-party finding, not a dependency one.
 
 | Field | Value |
 |---|---|
@@ -676,7 +678,7 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 - **Exploitation by a third party is conditional.** A value would have to reach another user's library through a file that user imports, such as a shared reference file or a journal's citation download, or through a metadata record its publisher controls. The user would then have to export to CSV and open the file in a spreadsheet. The importers, the database (checked from source) and the export all kept such values unchanged. The importer's trim and HTML-entity decoding can even turn ` =1+1` or `&#61;1+1` into `=1+1`.
 - **Saving in Excel destroyed the formula text.** After Excel saved the file as CSV, the cell held the computed value instead of the original text.
 
-### The fix (Draft)
+### The fix
 
 - **It changes only the serialization boundary.** Stored metadata, the importers, the database and the UI are unchanged, and no dependency changed.
 - A cell whose first character, after any leading whitespace or control characters, is `=`, `+`, `-` or `@`, or the full-width form of one (U+FF1D, U+FF0B, U+FF0D, U+FF20), is written as a quoted field with one added leading TAB: `=1+1` becomes `"<TAB>=1+1"`. This is the form OWASP suggests.
@@ -694,18 +696,139 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 
 - **Verified** in Excel 16.115 for Mac, with the file opened in the background. No cell of the patched export evaluated as a formula, each paper stayed one row, and every cell matched the file apart from Excel's own handling of numbers and of the encoding. The protection held after an Excel save as CSV and reopen. The old export evaluated 18 cells across the same three files.
 - **Not verified:** Windows Excel, LibreOffice Calc, Apple Numbers, Google Sheets, Power Query, Excel's text import wizard, and other locales, including those that separate cells with `;`. The TAB prefix is not a universal guarantee, and OWASP's guidance is that no single approach is safe for every consumer.
+- **Leading C1 controls.** A value that starts with a C1 control character (U+0080–U+009F) followed by a trigger is not neutralized. In the tested Excel it stayed text, and this app's own trim does not remove C1 controls, so re-import does not promote it to a formula. Another spreadsheet that strips them was not tested.
+- **The deployed export was not exercised.** No signed-in Production export or import was run, because none was authorized. That the fix is deployed rests on the deployment record: Production `dpl_EoZNtany…` was built from `a110b4ce`, whose tree is the tested head's.
 - **Re-evaluate** when the CSV columns or serializer change, when another tabular export such as XLSX is added, or when a spreadsheet that users rely on is shown to evaluate the neutralized form.
 
 ### Residual findings
 
-Each is separate work, and none has started:
+Each is separate work. Only the BibTeX item has started:
 
 - **No byte order mark.** Excel for Mac decodes a UTF-8 CSV without one as MacRoman, so `°C` shows as `¬∞C`. Adding one is deferred, because it changes the file for scripts that do not strip it.
 - **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import.
-- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, stay with repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
-- **CodeQL groups Q1–Q4** are unchanged. 18 alerts are open, and this change is not expected to move them.
+- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, are repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
+- **CodeQL.** The CSV change moved no alert: 18 were open on `main` `a110b4ce`, as before it.
 - **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is still unmeasured; see the "What remains" list of the [Zod 4 migration](#zod-4-migration).
+
+## BibTeX codec and record integrity (CodeQL Q1)
+
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. Until it merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
+
+| CodeQL alerts | Rule | Location on `a110b4ce` | Triage classification |
+|---|---|---|---|
+| 9–15 | `js/incomplete-sanitization`: "This does not escape backslash characters in the input." | `src/lib/exportUtils.ts` lines 208–216, one alert per `.replace` in `escapeBibTeX` | False positive for the rule's claim, because the chain's first step does escape the backslash. A real escaping bug sits next to them |
+| 7 | `js/double-escaping`: "This replacement may produce '\\' characters that are double-unescaped here." | `src/lib/importParsers.ts` line 87, in `decodeLatex` | Genuine defect |
+
+CodeQL assigns its "high" security severity per rule. The triage rated the group P3. Imported text reaches no HTML interpreter, and no exploitable path was demonstrated. The defects below concern the integrity of the exported file and of the imported data. They do not add up to eight separate exploits.
+
+### What was wrong
+
+Reproduced on `a110b4ce` with the real exporter and importer, exporting two papers:
+
+- **The encoder re-escaped its own output.** This is the bug next to alerts 9–15. `escapeBibTeX` was a chain of replacements, and its `{` and `}` steps also escaped the braces of its own `\textbackslash{}` token. `C:\data` was therefore written `C:\textbackslash\{\}data`, which LaTeX prints as `C:\{}data`. The importer compensated, so the app's own round trip hid the bug.
+- **One brace could break the file.** A literal brace was written `\{` or `\}`, but BibTeX counts every brace: the field scanner in `bibtex.web` has no backslash case. So:
+  - a title `a } b` came back with every other field of its record lost;
+  - a title `a { b` lost both records;
+  - a title containing `x}}, author = {Injected Person}` came back with that text as an author;
+  - an abstract containing `}` was cut there, and the keywords and study type after it were lost.
+
+  A DOI or a link with an unpaired brace, such as `10.1000/x}` or `https://example.com/search?q=}`, was written raw with the same effects. The WHATWG URL serializer keeps `{` and `}` raw in a query or a fragment.
+- **The year and citation key.** A year that is not a number at runtime went raw into both. The value `2020}, title = {Injected Title` broke the entry, and nothing was read back.
+- **The decoder read its own output again (alert 7).** `decodeLatex` was a sequence of replacements, so text one step had produced was decoded again. A literal `\textasciitilde{}` came back as `~`, and `\textasciicircum{}` as `^`.
+- **An accent could take a group's brace.** `{Caf\'e} Society` came back as `{Café Society`.
+- **Outer-brace stripping** removed a leading and a trailing brace even when they belonged to different groups: `{A} and {B}` became `A} and {B`.
+
+### The fix
+
+A shared module, `src/lib/bibtexCodec.ts`, holds both directions, so the tokens the exporter writes are the tokens the importer reads. The tokenizer and field parser are unchanged. They count every brace, as `bibtex.web` does, and that is correct. The defect was an encoder that treated `\}` as if it were not a brace.
+
+- **Text fields** (title, author, journal, abstract, keywords and note) are encoded in one pass. A single `replace` takes one character class and a callback, so every match is a character of the stored value, and no token is matched again.
+  - `\` → `\textbackslash{}`, where the old chain wrote `\textbackslash\{\}`. The other tokens are as before: `&` → `\&` (likewise `%`, `$`, `#` and `_`), `~` → `\textasciitilde{}` and `^` → `\textasciicircum{}`.
+  - A brace whose partner is in the same value is still written `\{` or `\}`, so balanced braces such as `{HIV}` come out byte for byte as before. A brace with no partner is written `\textbraceleft{}` or `\textbraceright{}`. These are LaTeX text symbols, available by default since the February 2020 release, and biber's recode table maps them to `{` and `}`. Zotero's BibTeX exporter draws the same line between paired and unpaired braces, using `\vphantom` for the unpaired ones.
+  - Authors and keywords are encoded one element at a time, so a brace pair never spans two names. BibTeX splits a name list only at an " and " outside braces.
+- **`doi` and `url` stay verbatim.** biblatex reads `doi` as a verbatim field and `url` as a URI field (manual 3.22a, §2.2.1 and §2.2.2), so a LaTeX escape there would change the identifier for any tool that reads it.
+  - A value is written raw unless the importer could not read it back from the raw text: its braces do not balance, one brace pair encloses all of it, or it contains one of the three verbatim tokens.
+  - Only then are `\`, `{` and `}` written as `\textbackslash{}`, `\textbraceleft{}` and `\textbraceright{}`. The importer decodes those three tokens in these fields and nothing else.
+  - Every other DOI and URL is written byte for byte as before, including `10.1000/456#789` and `https://doi.org/10.1000/456%23789`. Nothing is percent-encoded or LaTeX-escaped.
+- **Decoding** scans the original input left to right and decodes each recognized token once. Each character is either part of one token or copied once, so a decoded `\` cannot combine with the text after it.
+  - The accent table and its supported forms are unchanged: `{\'e}`, `{\'{e}}`, `\'e` and `\'{e}` for every accent and letter in the table, `\c{c}`, `\v{s}`, and `\ss`, `\aa`, `\ae`, `\AE`, `\o` and `\O`.
+  - An accent's letter braces must now come as a pair, so an accent no longer takes an enclosing group's brace.
+  - The legacy `\textbackslash\{\}` is still read as one backslash.
+- **Outer braces** are stripped only when the opening brace's partner is the last character. Braces are paired as TeX reads them, so `\{` and `\}` never close the group.
+- **Year and citation key.** A number, the column's type, is written as before. Any other runtime value is encoded as text in the `year` field, and the citation key uses the existing `nd`.
+
+| Field | Kind | Written as |
+|---|---|---|
+| Entry type and field names | Structure | Constants, unchanged |
+| Citation key | Structure | Unchanged for a numeric year. Any other year gives `nd` |
+| `title` | Text | Text encoding inside `{{…}}` |
+| `author` | List of text | Each name text-encoded, joined with " and " |
+| `year` | Number | Digits. Any other runtime value is text-encoded |
+| `journal`, `abstract` | Text | Text encoding |
+| `keywords` | List of text | Each keyword text-encoded, joined with ", " |
+| `note` | Text | `Study type: ` followed by the text encoding |
+| `doi` | Identifier | Verbatim |
+| `pmid` | Identifier | Only a valid PMID, as digits, unchanged |
+| `url` | URL | Verbatim, chosen by `exportUrlFor` with unchanged precedence |
+
+PMID authority on import is unchanged. It comes from an explicit `pmid` field first, then from a structurally recognized PubMed record URL in `url`, then from one in `note`.
+
+### Compatibility
+
+- **Ordinary records are unchanged.** A record with no backslash, no unpaired brace and no unwritable DOI or URL is written byte for byte as before. A test pins one such record to the old exporter's output.
+- **Files from other tools.** Over 200,000 random inputs, the new decoder differed from the old on 91, all in three intended classes:
+  - an accent no longer takes a following brace;
+  - an accent with an unclosed brace, such as `\'{e`, is no longer decoded;
+  - decoded text is not read again, so `\o{\'x}` gives `øx`, not `\ox`.
+
+  Separately, neighbouring groups such as `{A} and {B}` are no longer stripped.
+- **Older Paperlume exports.** An older export whose braces balance is read exactly. That held for 132,753 such values from the same random corpus, encoded the old way, and for the literal `\textasciitilde{}` that the old importer read as `~`.
+- **Older exports with an unpaired brace** were never valid BibTeX. They are read as before, by BibTeX's rules, and the lost fields are not reconstructed. Treating `\}` as an escaped brace to recover them would misread valid files in which `\}` closes a field, such as one whose value ends in a backslash.
+- **An inherent ambiguity.** To LaTeX, `\textbackslash\{\}` in another tool's file means a backslash followed by two braces. It is still read as a single backslash, because every older Paperlume export uses it for one.
+- **Stored data is not repaired.** No migration or data change is part of this work.
+
+### Evidence
+
+- **Tests.** Two new files hold 167 tests:
+  - `src/lib/__tests__/bibtexCodec.test.ts` (111) checks the codec against expectations written from LaTeX's and BibTeX's rules, including every accent in the table in all four forms, and against an independent transcription of BibTeX's brace rule;
+  - `src/lib/__tests__/exportBibTeX.integrity.test.ts` (56) checks real exports with an independent reader of BibTeX entry structure. It covers entry counts and field names, injection fixtures, DOI and URL recovery, scientific text, repeated cycles, older exports, hand-written files in other tools' styles and malformed input.
+  - On the old code, 23 of the 111 and 25 of the 56 fail, each for the defect it targets.
+- **Negative controls.** 22 weakened copies of the new code each fail the new suites. The existing BibTeX suites alone catch 6 of them: writing DOI names as resolver URLs, percent-encoding URLs twice, breaking one accent, dropping the braced-accent rule, and losing or merging a record.
+- **Other formats.** For 3,000 synthetic records, CSV and RIS output is byte-identical to the old code's (418,241 and 751,711 bytes).
+- **Build.** No dependency changed, and `package.json` and `package-lock.json` are byte-identical to the base.
+  - The web build's 9 files: 7 are byte-identical, and `index.html` differs only in the entry chunk's name.
+  - The entry chunk grows by 1,439 B (+544 B gzip). Its normalized token diff falls only in the BibTeX exporter, the importer's decoder and the new module.
+  - The URL origins and the inlined environment keys are unchanged.
+  - The extension output and its packaged archive are byte-identical.
+- **Not verified.** No BibTeX program, biber, pandoc or reference manager is installed here, and installing one was out of scope. The grammar facts come from reading sources, not from running tools: `bibtex.web` 0.99e, the biblatex 3.22a manual, the LaTeX reference manual's list of text symbols, biber's recode table and Zotero's BibTeX translator. How other tools display `\textbraceleft{}` and `\textbraceright{}`, or the tokens in a verbatim field, was not observed.
+
+### CodeQL
+
+The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. Only an analysis of `main` after a merge can close the alerts. If the alerts close then, the open count would fall from 18 to 10. That is a projection, not a result.
+
+### Limitations not changed here
+
+These existed before this work, and each is separate:
+
+- `toBibTeXAuthor` reorders a name that is already in "Last, First" form, so `Smith, John` is written `John, Smith,`.
+- The importer splits authors at every " and " and keywords at every comma, braces or not. A MeSH term such as `Neoplasms, Experimental` comes back as two keywords.
+- Only the first line of a study type is read back from `note`, and only a four-digit year from `year`.
+- The tokenizer does not read parenthesis-delimited entries (`@article(…)`), `@string` macros or `#` concatenation. A bare value that contains a brace ends field parsing for its entry. A long run of `@` without a `{` takes quadratic time.
+- Some LaTeX that other tools write is not decoded: Zotero's `{\textbackslash}` and `\{\vphantom{\}}`, `\i`, `\AA`, `\^{}` and math mode. An unknown command that begins with `c` or `v` loses its first letters, so `\cite` becomes `ite`.
+- A literal `"` is written raw. That is harmless to BibTeX in a brace-delimited field, but German `babel` shorthands give `"a` a meaning.
+
+### What remains
+
+Each item is separate work, and none of it is part of this change:
+
+- **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
+- **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
+- **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
+- **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
+- **CI runtime.** The `e2e-local` lane runs close to its job timeout.
+- **Superseded Dependabot pull requests.** PRs 351–354 are still open.
 
 ## NanoID finding — REMEDIATED
 
