@@ -273,11 +273,18 @@ function toBibTeXAuthor(name: string): string {
 /**
  * Generate a unique BibTeX citation key.
  * Format: FirstAuthorLastName + Year + first significant title word.
- * Appends a/b/c/... for duplicates.
+ * Appends a/b/c/... for duplicates, then _1, _2, _3, ... once those are used.
+ *
+ * `usedKeys` holds every key already in the file, and it alone decides whether
+ * a key is free: every candidate is checked against it, whichever paper's key
+ * it would repeat. `fallbackStart` only records, per base key, where the search
+ * for a numbered key resumes, so a large group does not rescan the numbers it
+ * has already used.
  */
 function generateCiteKey(
   paper: PaperWithTags,
   usedKeys: Set<string>,
+  fallbackStart: Map<string, number>,
 ): string {
   // Author part
   let authorPart = "Unknown";
@@ -326,8 +333,14 @@ function generateCiteKey(
     }
   }
 
-  // Fallback: append random digits
-  const fallback = `${baseKey}_${Date.now()}`;
+  // Then _1, _2, _3, ...: the lowest number whose key the file does not hold
+  // yet. Every number below where the search starts is already in the file.
+  // Nothing here reads the clock, so the same papers in the same order get the
+  // same keys in every export.
+  let n = fallbackStart.get(baseKey) ?? 1;
+  while (usedKeys.has(`${baseKey}_${n}`)) n++;
+  fallbackStart.set(baseKey, n);
+  const fallback = `${baseKey}_${n}`;
   usedKeys.add(fallback);
   return fallback;
 }
@@ -340,12 +353,13 @@ function generateCiteKey(
  */
 export function exportToBibTeX(papers: PaperWithTags[]): BibTeXExportSummary {
   const usedKeys = new Set<string>();
+  const fallbackStart = new Map<string, number>();
   let affectedPaperCount = 0;
   let exceptionalDoiCount = 0;
   let exceptionalUrlCount = 0;
 
   const entries = papers.map((p) => {
-    const key = generateCiteKey(p, usedKeys);
+    const key = generateCiteKey(p, usedKeys, fallbackStart);
     const fields: string[] = [];
     let affected = false;
 

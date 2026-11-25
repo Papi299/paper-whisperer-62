@@ -786,6 +786,439 @@ describe("the year and the citation key stay inside their boundaries", () => {
   });
 });
 
+// ── Citation-key uniqueness ──
+
+/** Every entry's citation key, as the structural oracle reads the file. The importer does not keep keys. */
+const citeKeys = (file: string): string[] => bibtexEntries(file).map((entry) => entry.key);
+
+const LETTERS = [..."abcdefghijklmnopqrstuvwxyz"];
+
+/**
+ * The keys of `count` papers sharing the base key `base`, in export order,
+ * written out from the naming rule rather than taken from the exporter: the
+ * base key, then the base key followed by a to z, then `_1`, `_2`, `_3`, ...
+ */
+function groupKeys(base: string, count: number): string[] {
+  const keys = [base, ...LETTERS.map((letter) => base + letter)];
+  for (let n = 1; keys.length < count; n++) keys.push(`${base}_${n}`);
+  return keys.slice(0, count);
+}
+
+/** `count` papers with the base key Smith2024_Alpha: same first author, year and first significant title word. */
+const alphaGroup = (count: number, id = "a"): PaperWithTags[] =>
+  Array.from({ length: count }, (_, i) =>
+    makePaper({ id: `${id}${i}`, title: `Alpha trial ${i}`, authors: ["John Smith"], doi: `10.1000/${id}${i}` }),
+  );
+
+/**
+ * The file `papers` make when entry i has the key `keys[i]`: each entry exactly
+ * as an export of that paper alone writes it, with only the key replaced. An
+ * export equal to this changed nothing but keys.
+ */
+async function entriesWithKeys(papers: PaperWithTags[], keys: readonly string[]): Promise<string> {
+  const entries: string[] = [];
+  for (const [i, paper] of papers.entries()) {
+    const alone = await exportBib([paper]);
+    expect(alone.startsWith("@article{")).toBe(true);
+    entries.push(`@article{${keys[i]}${alone.slice(alone.indexOf(","))}`);
+  }
+  return entries.join("\n\n");
+}
+
+const FROZEN = Date.UTC(2026, 10, 24, 22, 43, 49, 306);
+
+/**
+ * Clock readings at which an export must not differ: a time to set and the
+ * milliseconds to let pass before exporting. `Date.now()` then reads 0, 3,
+ * ...307 and ...128, and `performance.now()` 0, 2, 1 and 5: far apart, and odd
+ * and even for each clock.
+ */
+const CLOCKS: ReadonlyArray<readonly [now: number, elapsed: number]> = [
+  [0, 0],
+  [1, 2],
+  [FROZEN, 1],
+  [Date.UTC(2100, 0, 1, 0, 0, 0, 123), 5],
+];
+
+describe("every entry in a file has its own citation key", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the key of a single paper exactly as before", async () => {
+    // Captured from the exporter on main ded56c63.
+    expect(await exportBib(alphaGroup(1))).toBe(`@article{Smith2024_Alpha,
+  title     = {{Alpha trial 0}},
+  author    = {Smith, John},
+  year      = {2024},
+  journal   = {Journal of Testing},
+  doi       = {10.1000/a0},
+  url       = {https://doi.org/10.1000/a0},
+  abstract  = {This is the abstract.},
+  keywords  = {treatment},
+  note      = {Study type: Cohort}
+}`);
+  });
+
+  it("gives a second paper with the same base key the suffix a, as before", async () => {
+    const papers = alphaGroup(2);
+    const file = await exportBib(papers);
+
+    expect(citeKeys(file)).toEqual(["Smith2024_Alpha", "Smith2024_Alphaa"]);
+    expect(file).toBe(await entriesWithKeys(papers, ["Smith2024_Alpha", "Smith2024_Alphaa"]));
+  });
+
+  it("uses the base key and a to z, and nothing else, for 27 papers", async () => {
+    const papers = alphaGroup(27);
+    const file = await exportBib(papers);
+
+    expect(citeKeys(file)).toEqual(groupKeys("Smith2024_Alpha", 27));
+    expect(citeKeys(file).slice(-2)).toEqual(["Smith2024_Alphay", "Smith2024_Alphaz"]);
+    expect(file).toBe(await entriesWithKeys(papers, groupKeys("Smith2024_Alpha", 27)));
+  });
+
+  it("gives the 28th paper the key Smith2024_Alpha_1", async () => {
+    const papers = alphaGroup(28);
+    const file = await exportBib(papers);
+
+    expect(citeKeys(file).slice(-3)).toEqual(["Smith2024_Alphay", "Smith2024_Alphaz", "Smith2024_Alpha_1"]);
+    expect(file).toBe(await entriesWithKeys(papers, groupKeys("Smith2024_Alpha", 28)));
+  });
+
+  it("numbers every later paper in turn, never repeating a key", async () => {
+    expect(citeKeys(await exportBib(alphaGroup(29))).slice(-3)).toEqual([
+      "Smith2024_Alphaz",
+      "Smith2024_Alpha_1",
+      "Smith2024_Alpha_2",
+    ]);
+    expect(citeKeys(await exportBib(alphaGroup(30))).slice(-3)).toEqual([
+      "Smith2024_Alpha_1",
+      "Smith2024_Alpha_2",
+      "Smith2024_Alpha_3",
+    ]);
+
+    const papers = alphaGroup(40);
+    const file = await exportBib(papers);
+    expect(citeKeys(file)).toEqual(groupKeys("Smith2024_Alpha", 40));
+    expect(citeKeys(file).slice(27)).toEqual(Array.from({ length: 13 }, (_, i) => `Smith2024_Alpha_${i + 1}`));
+    expect(new Set(citeKeys(file)).size).toBe(40);
+    expect(file).toBe(await entriesWithKeys(papers, groupKeys("Smith2024_Alpha", 40)));
+  });
+
+  it("gives 3,000 papers with one base key 3,000 keys, and keeps every paper in its own entry", async () => {
+    const papers = alphaGroup(3000);
+    const summary = exportToBibTeX(papers);
+    const file = await exported();
+    const entries = bibtexEntries(file);
+
+    expect(entries.map((entry) => entry.key)).toEqual(groupKeys("Smith2024_Alpha", 3000));
+    expect(new Set(entries.map((entry) => entry.key)).size).toBe(3000);
+    expect(entries[2999].key).toBe("Smith2024_Alpha_2973");
+    expect(entries.every((entry) => fieldNames(entry).join() === ALL_FIELDS.join())).toBe(true);
+    expect(entries.map((entry) => entry.fields.find(([name]) => name === "doi")?.[1])).toEqual(
+      papers.map((paper) => paper.doi),
+    );
+    expect(summary).toEqual({ paperCount: 3000, affectedPaperCount: 0, exceptionalDoiCount: 0, exceptionalUrlCount: 0 });
+
+    const { papers: back, warnings } = parseBibTeX(file);
+    expect(warnings).toEqual([]);
+    expect(back.map((paper) => [paper.title, paper.doi])).toEqual(papers.map((paper) => [paper.title, paper.doi]));
+  });
+
+  it("finds each numbered key without rescanning the numbers already used", () => {
+    // Work is counted as Set lookups, the allocator's one operation, so the
+    // check does not depend on the speed of the machine. Linear work triples
+    // when the group triples. Starting every numbered search again from _1
+    // multiplies it by about nine. The papers have no DOI, which keeps the DOI
+    // encoder's own lookups out of the count.
+    const lookups = (count: number): number => {
+      const papers = alphaGroup(count).map((paper) => ({ ...paper, doi: null }));
+      const has = Set.prototype.has;
+      let calls = 0;
+      Set.prototype.has = function (this: Set<unknown>, value: unknown) {
+        calls++;
+        return has.call(this, value);
+      };
+      try {
+        exportToBibTeX(papers);
+      } finally {
+        Set.prototype.has = has;
+      }
+      return calls;
+    };
+
+    const small = lookups(1000);
+    const large = lookups(3000);
+    expect(small).toBeGreaterThan(1000);
+    expect(large).toBeLessThan(4 * small);
+  });
+
+  it("gives every paper its own key while the clock stands still", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"], now: FROZEN });
+    const file = await exportBib(alphaGroup(30));
+
+    expect(Date.now()).toBe(FROZEN);
+    expect(citeKeys(file)).toEqual(groupKeys("Smith2024_Alpha", 30));
+    expect(new Set(citeKeys(file)).size).toBe(30);
+  });
+
+  it("writes the same keys and bytes whatever the clock reads", async () => {
+    const papers = alphaGroup(60);
+    const files: string[] = [];
+    for (const [now, elapsed] of CLOCKS) {
+      vi.useFakeTimers({ toFake: ["Date", "performance"], now });
+      vi.advanceTimersByTime(elapsed);
+      files.push(await exportBib(papers));
+      vi.useRealTimers();
+    }
+    files.push(await exportBib(papers));
+
+    expect(new Set(files).size).toBe(1);
+    expect(citeKeys(files[0])).toEqual(groupKeys("Smith2024_Alpha", 60));
+  });
+
+  it("numbers each group from _1, and no two groups share a key", async () => {
+    const beta = Array.from({ length: 29 }, (_, i) =>
+      makePaper({ id: `b${i}`, title: `Beta trial ${i}`, authors: ["John Smith"], doi: `10.1000/b${i}` }),
+    );
+    const lee = Array.from({ length: 28 }, (_, i) =>
+      makePaper({ id: `l${i}`, title: `Alpha trial ${i}`, authors: ["Ann Lee"], doi: `10.1000/l${i}` }),
+    );
+    // One group first, then two interleaved, so groups are numbered both one
+    // after another and in turn.
+    const papers = [...alphaGroup(30, "a"), ...beta.flatMap((paper, i) => (i < lee.length ? [paper, lee[i]] : [paper]))];
+    const keys = citeKeys(await exportBib(papers));
+    const keysOf = (prefix: string) => keys.filter((_, i) => papers[i].id.startsWith(prefix));
+
+    expect(keysOf("a")).toEqual(groupKeys("Smith2024_Alpha", 30));
+    expect(keysOf("b")).toEqual(groupKeys("Smith2024_Beta", 29));
+    expect(keysOf("l")).toEqual(groupKeys("Lee2024_Alpha", 28));
+    expect(new Set(keys).size).toBe(87);
+  });
+
+  it("passes over a key that another paper's key already took", async () => {
+    const smith = (id: string, title: string) =>
+      makePaper({ id, title, authors: ["John Smith"], doi: `10.1000/${id}` });
+
+    // A suffixed key first, then the same text as another paper's base key.
+    expect(citeKeys(await exportBib([smith("p1", "Alpha"), smith("p2", "Alpha"), smith("p3", "Alphaa")]))).toEqual([
+      "Smith2024_Alpha",
+      "Smith2024_Alphaa",
+      "Smith2024_Alphaaa",
+    ]);
+
+    // A base key first, then the same text as a suffixed key.
+    expect(
+      citeKeys(await exportBib([smith("p1", "Alphab"), smith("p2", "Alpha"), smith("p3", "Alpha"), smith("p4", "Alpha")])),
+    ).toEqual(["Smith2024_Alphab", "Smith2024_Alpha", "Smith2024_Alphaa", "Smith2024_Alphac"]);
+
+    // Other papers' base keys can take all of a to z, so a group of three
+    // already needs numbered keys.
+    const others = LETTERS.map((letter, i) => smith(`t${i}`, `Alpha${letter}`));
+    const keys = citeKeys(await exportBib([...others, smith("p1", "Alpha"), smith("p2", "Alpha"), smith("p3", "Alpha")]));
+    expect(keys).toEqual([
+      ...LETTERS.map((letter) => `Smith2024_Alpha${letter}`),
+      "Smith2024_Alpha",
+      "Smith2024_Alpha_1",
+      "Smith2024_Alpha_2",
+    ]);
+  });
+
+  it("never gives a title a numbered key's form, so no base key can take one", async () => {
+    // A numbered key is a base key, an underscore and a number. A base key has
+    // one underscore only, because the author and title parts keep only
+    // letters and digits: a title "Alpha_1" gives Smith2024_Alpha1.
+    const papers = [makePaper({ id: "u", title: "Alpha_1 results", authors: ["John Smith"] }), ...alphaGroup(28)];
+    const keys = citeKeys(await exportBib(papers));
+
+    expect(keys).toEqual(["Smith2024_Alpha1", ...groupKeys("Smith2024_Alpha", 28)]);
+    expect(new Set(keys).size).toBe(29);
+  });
+
+  it("agrees with the naming rule applied one candidate at a time, for any mix of colliding papers", async () => {
+    // The rule in its simplest form: the first of the base key, the base key
+    // with a to z, then with _1, _2, ... that no earlier entry has, every
+    // search starting again from the beginning.
+    const reference = (bases: readonly string[]) => {
+      const owner = new Map<string, string>();
+      let numbered = 0;
+      let takenByAnotherBase = 0;
+      const firstFree = (base: string): string => {
+        for (const candidate of [base, ...LETTERS.map((letter) => base + letter)]) {
+          if (!owner.has(candidate)) return candidate;
+        }
+        for (let n = 1; ; n++) if (!owner.has(`${base}_${n}`)) return `${base}_${n}`;
+      };
+      const keys = bases.map((base) => {
+        if (owner.has(base) && owner.get(base) !== base) takenByAnotherBase++;
+        const key = firstFree(base);
+        if (/^_\d+$/.test(key.slice(base.length))) numbered++;
+        owner.set(key, base);
+        return key;
+      });
+      return { keys, numbered, takenByAnotherBase };
+    };
+
+    // Deterministic, so a failure reproduces.
+    let seed = 0xc17e;
+    const next = () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const pick = <T,>(values: readonly T[]): T => values[Math.floor(next() * values.length)];
+    // Title words whose base keys are each other's suffixed keys, weighted so
+    // that some groups outgrow a to z.
+    const WORDS = ["Alpha", "Alpha", "Alpha", "Alphaa", "Alphab", "Alphaz", "Alphaaa", "Alpha1"] as const;
+    const SMITH = ["John Smith", "Smith"] as const;
+    const AUTHORS = [SMITH, SMITH, SMITH, ["Ann Lee", "Lee"]] as const;
+    const YEARS = [[2024, "2024"], [2024, "2024"], [2024, "2024"], [null, "nd"]] as const;
+
+    let numbered = 0;
+    let takenByAnotherBase = 0;
+    for (let round = 0; round < 12; round++) {
+      const picks = Array.from({ length: 240 }, () => [pick(WORDS), pick(AUTHORS), pick(YEARS)] as const);
+      const papers = picks.map(([word, [author], [year]], i) =>
+        makePaper({ id: `r${round}-${i}`, title: `${word} trial`, authors: [author], year, doi: `10.1000/r${round}-${i}` }),
+      );
+      const expected = reference(picks.map(([word, [, surname], [, yearPart]]) => `${surname}${yearPart}_${word}`));
+
+      expect(citeKeys(await exportBib(papers))).toEqual(expected.keys);
+      numbered += expected.numbered;
+      takenByAnotherBase += expected.takenByAnotherBase;
+    }
+    // The mix reached numbered keys and cross-group collisions, so the
+    // agreement above is not vacuous.
+    expect(numbered).toBeGreaterThan(0);
+    expect(takenByAnotherBase).toBeGreaterThan(0);
+  });
+
+  it("writes the same file every time the same papers are exported", async () => {
+    const papers = [
+      ...alphaGroup(30, "a"),
+      makePaper({ id: "x1", title: "Alpha", authors: ["John Smith"], doi: "10.1000/x}" }),
+      makePaper({ id: "x2", title: "Alpha", authors: ["John Smith"], doi: null, journal_url: "https://example.com/?q={" }),
+      sentinel(),
+    ];
+    const first = exportToBibTeX(papers);
+    const files = [await exported()];
+    for (const [now, elapsed] of CLOCKS.slice(0, 2)) {
+      vi.useFakeTimers({ toFake: ["Date", "performance"], now });
+      vi.advanceTimersByTime(elapsed);
+      expect(exportToBibTeX(papers)).toEqual(first);
+      files.push(await exported());
+      vi.useRealTimers();
+    }
+
+    expect(new Set(files).size).toBe(1);
+    expect(first).toEqual({ paperCount: 33, affectedPaperCount: 2, exceptionalDoiCount: 1, exceptionalUrlCount: 1 });
+    expect(citeKeys(files[0]).slice(-3)).toEqual(["Smith2024_Alpha_4", "Smith2024_Alpha_5", "Sentinel2023_Sentinel"]);
+  });
+
+  it("gives one record exported 30 times 30 entries with 30 keys", async () => {
+    const paper = makePaper({ title: "Alpha", authors: ["John Smith"] });
+    const papers = Array.from({ length: 30 }, () => paper);
+    const file = await exportBib(papers);
+    const entries = bibtexEntries(file);
+
+    expect(entries.map((entry) => entry.key)).toEqual(groupKeys("Smith2024_Alpha", 30));
+    expect(new Set(entries.map((entry) => JSON.stringify(entry.fields))).size).toBe(1);
+    expect(parseBibTeX(file).papers).toHaveLength(30);
+    expect(file).toBe(await entriesWithKeys(papers, groupKeys("Smith2024_Alpha", 30)));
+  });
+
+  it("keeps the key of a paper with no authors, no year or no usable title word", async () => {
+    const file = await exportBib([
+      makePaper({ authors: [], year: null, title: "" }),
+      makePaper({ authors: [], title: "The Of And" }),
+      makePaper({ authors: [`Jos${String.fromCodePoint(0xe9)} N${String.fromCodePoint(0xfa, 0xf1)}ez`], title: "Alpha" }),
+      makePaper({ authors: [String.fromCodePoint(0x674e)], title: "Alpha" }),
+      makePaper({ authors: ["   "], title: "!!!" }),
+      makePaper({ authors: ["Ann Lee"], title: String.fromCodePoint(0x3b1, 0x3b2, 0x20, 0x3b3) }),
+      makePaper({ authors: ["Ann O'Brien-Smith"], title: "On the Alpha" }),
+    ]);
+
+    // Captured from the exporter on main ded56c63.
+    expect(citeKeys(file)).toEqual([
+      "Unknownnd_untitled",
+      "Unknown2024_The",
+      "Nez2024_Alpha",
+      "2024_Alpha",
+      "Unknown2024_untitled",
+      "Lee2024_untitled",
+      "OBrienSmith2024_Alpha",
+    ]);
+
+    const unnamed = Array.from({ length: 28 }, (_, i) => makePaper({ id: `n${i}`, authors: [], year: null, title: "" }));
+    expect(citeKeys(await exportBib(unnamed))).toEqual(groupKeys("Unknownnd_untitled", 28));
+  });
+
+  it("keeps every entry of a group whose year is not a number at runtime inside its boundaries", async () => {
+    const papers = Array.from({ length: 28 }, (_, i) =>
+      makePaper({
+        id: `y${i}`,
+        title: "Real Title",
+        authors: ["John Smith"],
+        // Not the column's type, so not reachable through the typed API.
+        year: "2020}, title = {Injected Title" as unknown as number,
+      }),
+    );
+    const file = await exportBib([...papers, sentinel()]);
+    const entries = bibtexEntries(file);
+
+    expect(entries.map((entry) => entry.key)).toEqual([...groupKeys("Smithnd_Real", 28), "Sentinel2023_Sentinel"]);
+    expect(entries.slice(0, 28).every((entry) => fieldNames(entry).join() === ALL_FIELDS.join())).toBe(true);
+
+    const { papers: back } = parseBibTeX(file);
+    expect(back).toHaveLength(29);
+    expect(back.slice(0, 28).every((paper) => paper.title === "Real Title" && paper.year === 2020)).toBe(true);
+    expectSentinel(file, back[28]);
+  });
+
+  it("builds a key only from letters, digits and . + - _ for any number in the year", async () => {
+    const years = [Number.NaN, Infinity, -Infinity, 1e21, 2020.5, 1e-7];
+    const papers = [...years, ...Array<number>(28).fill(Number.NaN)].map((year, i) =>
+      makePaper({ id: `n${i}`, title: "Alpha", authors: ["John Smith"], year }),
+    );
+    const keys = citeKeys(await exportBib(papers));
+
+    // Captured from the exporter on main ded56c63.
+    expect(keys.slice(0, 6)).toEqual([
+      "SmithNaN_Alpha",
+      "SmithInfinity_Alpha",
+      "Smith-Infinity_Alpha",
+      "Smith1e+21_Alpha",
+      "Smith2020.5_Alpha",
+      "Smith1e-7_Alpha",
+    ]);
+    expect(keys.slice(6)).toEqual(groupKeys("SmithNaN_Alpha", 29).slice(1));
+    expect(keys.every((key) => /^[A-Za-z0-9_.+-]+$/.test(key))).toBe(true);
+    expect(new Set(keys).size).toBe(34);
+  });
+
+  it("writes an empty file for an empty export, as before", async () => {
+    const summary = exportToBibTeX([]);
+
+    expect(await exported()).toBe("");
+    expect(downloads).toHaveLength(1);
+    expect(summary).toEqual({ paperCount: 0, affectedPaperCount: 0, exceptionalDoiCount: 0, exceptionalUrlCount: 0 });
+  });
+
+  it("changes nothing but keys in a group with exceptional identifiers, and counts them as before", async () => {
+    const papers = alphaGroup(30).map((paper, i) =>
+      i % 6 === 0
+        ? { ...paper, doi: `10.1000/x${i}}` }
+        : i % 6 === 1
+          ? { ...paper, doi: null, journal_url: `https://example.com/?q=${i}{` }
+          : paper,
+    );
+    const summary = exportToBibTeX(papers);
+    const file = await exported();
+
+    expect(summary).toEqual({ paperCount: 30, affectedPaperCount: 10, exceptionalDoiCount: 5, exceptionalUrlCount: 5 });
+    expect(file).toBe(await entriesWithKeys(papers, groupKeys("Smith2024_Alpha", 30)));
+  });
+});
+
 // ── Scientific text ──
 
 const cp = (...codes: number[]) => String.fromCodePoint(...codes);
