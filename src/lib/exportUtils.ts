@@ -271,15 +271,50 @@ function toBibTeXAuthor(name: string): string {
 }
 
 /**
+ * The form in which a citation key is compared with the other keys in the
+ * file. BibTeX treats two database keys that differ only in letter case as the
+ * same key: the second entry is a "Repeated entry", and the rest of it is
+ * skipped (bibtex.web, section 268). A key is therefore free only if no key in
+ * the file is the same up to letter case.
+ *
+ * This form decides which keys are free and nothing else: a key is written with
+ * the capitals it was built with. A key that collides with nothing is written
+ * exactly as before, so a document that already cites it still matches it,
+ * whether a tool compares keys with or without letter case.
+ *
+ * A key holds only ASCII characters (letters and digits, `_`, and `.`, `+` or
+ * `-` from an unusual year), so lowercasing folds exactly the letters BibTeX
+ * folds, A to Z.
+ */
+function citeKeyIdentity(key: string): string {
+  return key.toLowerCase();
+}
+
+/**
+ * Gives out `candidate` if no key in the file is the same up to letter case:
+ * records it in `usedKeys` and returns true. Otherwise records nothing and
+ * returns false. The lookup and the record use the same form, so no candidate
+ * can be accepted under one comparison and stored under another.
+ */
+function claimCiteKey(usedKeys: Set<string>, candidate: string): boolean {
+  const identity = citeKeyIdentity(candidate);
+  if (usedKeys.has(identity)) return false;
+  usedKeys.add(identity);
+  return true;
+}
+
+/**
  * Generate a unique BibTeX citation key.
  * Format: FirstAuthorLastName + Year + first significant title word.
  * Appends a/b/c/... for duplicates, then _1, _2, _3, ... once those are used.
  *
- * `usedKeys` holds every key already in the file, and it alone decides whether
- * a key is free: every candidate is checked against it, whichever paper's key
- * it would repeat. `fallbackStart` only records, per base key, where the search
- * for a numbered key resumes, so a large group does not rescan the numbers it
- * has already used.
+ * `usedKeys` holds every key already in the file, in the form `citeKeyIdentity`
+ * gives, and it alone decides whether a key is free: every candidate is checked
+ * against it by `claimCiteKey`, whichever paper's key it would repeat and
+ * whatever its capitals. `fallbackStart` only records where the search for a
+ * numbered key resumes, per base key up to letter case, so a large group does
+ * not rescan the numbers it has already used, even when its base keys differ
+ * in capitals.
  */
 function generateCiteKey(
   paper: PaperWithTags,
@@ -318,31 +353,25 @@ function generateCiteKey(
   const baseKey = `${authorPart}${yearPart}_${significantWord}`;
 
   // Ensure uniqueness
-  if (!usedKeys.has(baseKey)) {
-    usedKeys.add(baseKey);
-    return baseKey;
-  }
+  if (claimCiteKey(usedKeys, baseKey)) return baseKey;
 
   // Append a, b, c, ...
   const suffixes = "abcdefghijklmnopqrstuvwxyz";
   for (const s of suffixes) {
     const candidate = `${baseKey}${s}`;
-    if (!usedKeys.has(candidate)) {
-      usedKeys.add(candidate);
-      return candidate;
-    }
+    if (claimCiteKey(usedKeys, candidate)) return candidate;
   }
 
   // Then _1, _2, _3, ...: the lowest number whose key the file does not hold
   // yet. Every number below where the search starts is already in the file.
-  // Nothing here reads the clock, so the same papers in the same order get the
-  // same keys in every export.
-  let n = fallbackStart.get(baseKey) ?? 1;
-  while (usedKeys.has(`${baseKey}_${n}`)) n++;
-  fallbackStart.set(baseKey, n);
-  const fallback = `${baseKey}_${n}`;
-  usedKeys.add(fallback);
-  return fallback;
+  // Base keys that differ only in capitals share one search, because their
+  // numbered keys are the same up to letter case. Nothing here reads the clock,
+  // so the same papers in the same order get the same keys in every export.
+  const group = citeKeyIdentity(baseKey);
+  let n = fallbackStart.get(group) ?? 1;
+  while (!claimCiteKey(usedKeys, `${baseKey}_${n}`)) n++;
+  fallbackStart.set(group, n);
+  return `${baseKey}_${n}`;
 }
 
 /**
