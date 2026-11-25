@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is the [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1, whose fix is proposed in a Draft pull request.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1 merged that evening as `ded56c63`. CodeQL's analysis of that commit closed alerts 7 and 9–15 and left 10 open, and 10 were still open on 2026-11-25. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness), whose fix is proposed in a Draft pull request.
 
 ## Current audit state
 
@@ -44,6 +44,8 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 **After the Zod 4 migration merged (2026-11-24).** PR #372 merged at 04:43:34 UTC as `cec11199`, and Production `dpl_413PdQNt` was built from it; it was READY at 04:44:02 UTC. On that commit, `npm audit` measured 0 full and 0 production findings, as projected above. Dependabot reported alert 16 fixed at 04:44:17 UTC and opened none, which left **0 open alerts**. CodeQL still showed 18. Re-measured at 07:45 UTC the same day, all of these were unchanged.
 
 **After the CSV export hardening merged (2026-11-24).** PR #373, a first-party change with no dependency delta, merged at 09:40:45 UTC as `a110b4ce` (see [CSV formula injection](#csv-formula-injection-cwe-1236)). Re-measured on that commit at 10:10 UTC: `npm audit` 0 full and 0 production findings after a clean `npm ci`, **0 open Dependabot alerts**, 18 open CodeQL alerts and 0 secret-scanning alerts.
+
+**After the BibTeX codec merged (2026-11-24).** PR #374, a first-party change with no dependency delta, merged at 22:43:26 UTC as `ded56c63` (see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1)). Re-measured on 2026-11-25 between 06:10 and 06:35 UTC: `npm audit` on that commit found 0 full and 0 production findings after a clean `npm ci`, with `package-lock.json` SHA-256 `48869379…`, unchanged since the Zod 4 migration. GitHub showed **0 open Dependabot alerts**, 10 open CodeQL alerts and 0 secret-scanning alerts. The CodeQL count fell from 18 because that merge fixed alerts 7 and 9–15.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -652,8 +654,8 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
   - All 18 results come from single-file pattern queries. No data-flow query reported anything.
   - The Edge Functions import from `esm.sh`, which CodeQL cannot resolve, so the absence of data-flow results there is weak evidence.
   - The deployed Edge Function bundle was not compared with `main`, and no CodeQL CLI was run locally.
-- **Proposed follow-up repair groups.** Each would be its own bounded PR. Only Q1 has started:
-  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1);
+- **Proposed follow-up repair groups.** Each would be its own bounded PR. Only Q1 has been done:
+  - **Q1**, BibTeX import and export (CodeQL alerts 7 and 9–15). Its fix merged on 2026-11-24 as `ded56c63`, and CodeQL's analysis of that commit closed all eight alerts; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1);
   - **Q2**, Edge metadata extraction (alerts 2–5 and 8). It needs an Edge Function deploy;
   - **Q3**, client HTML-entity decoding, plus an app-wide guard against HTML sinks (alert 6);
   - **Q4**, test-oracle hygiene (alerts 1, 16, 17 and 18).
@@ -702,18 +704,18 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 
 ### Residual findings
 
-Each is separate work. Only the BibTeX item has started:
+Each is separate work. Only the BibTeX item has been done:
 
 - **No byte order mark.** Excel for Mac decodes a UTF-8 CSV without one as MacRoman, so `°C` shows as `¬∞C`. Adding one is deferred, because it changes the file for scripts that do not strip it.
 - **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import.
-- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, are repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). Its fix is proposed in a Draft pull request; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
+- **BibTeX.** The codec findings, including DOI and URL fields written without escaping, are repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). Its fix merged on 2026-11-24 as `ded56c63`; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
 - **CodeQL.** The CSV change moved no alert: 18 were open on `main` `a110b4ce`, as before it.
 - **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is still unmeasured; see the "What remains" list of the [Zod 4 migration](#zod-4-migration).
 
 ## BibTeX codec and record integrity (CodeQL Q1)
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrects that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). A further revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001B`, adds [the export notice](#the-export-notice) and a [browser qualification](#browser-qualification), and leaves the exported bytes unchanged. Until the fix merges and deploys, `main` and Production still write and read BibTeX the old way. This is a first-party finding, and no dependency changes.
+**Status: remediated.** `PAPERLUME-CODEQL-BIBTEX-CODEC-001` implements repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), on base `main` `a110b4ce`. An independent review then found that its first version changed DOIs and URLs written by other tools. The revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001A`, corrected that in the same Draft; see [DOI and URL fields](#doi-and-url-fields). A further revision, `PAPERLUME-CODEQL-BIBTEX-CODEC-001B`, added [the export notice](#the-export-notice) and a [browser qualification](#browser-qualification), and left the exported bytes unchanged. PR #374 merged at 22:43:26 UTC on 2026-11-24 as `ded56c63`, whose tree is the reviewed head's (`f1a90ba4`). Production `dpl_Np9zQiCAVqqA2w4nttr2b3vFezJ5`, built from that commit, was READY at 22:43:49 UTC. This is a first-party finding, and no dependency changes.
 
 | CodeQL alerts | Rule | Location on `a110b4ce` | Triage classification |
 |---|---|---|---|
@@ -964,14 +966,16 @@ npm run test:e2e:local -- e2e/bibtex-qualification.spec.ts e2e/file-import-order
 
 ### CodeQL
 
-The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. The revision adds no code of either alert's kind: its encoding is one `replace` with a callback, and its decoder reads each token once. Only an analysis of `main` after a merge can close the alerts. If the alerts close then, the open count would fall from 18 to 10. That is a projection, not a result.
+The change removes the code the eight alerts point at: the replacement chain in `escapeBibTeX` and the replacement sequence in `decodeLatex`. The revision adds no code of either alert's kind: its encoding is one `replace` with a callback, and its decoder reads each token once. Only an analysis of `main` after a merge can close the alerts.
+
+**Result after the merge.** CodeQL's analysis of `ded56c63`, created at 22:45:23 UTC on 2026-11-24, reported 10 results, down from 18. Alerts 7 and 9–15 are closed as fixed at that time, and no new alert opened. Re-read on 2026-11-25: 10 open, 8 fixed and none dismissed. The open alerts are 1–6, 8 and 16–18, groups Q2–Q4 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23), so this work does not resolve every CodeQL finding.
 
 ### Limitations not changed here
 
 These existed before this work, and each is separate:
 
 - `toBibTeXAuthor` reorders a name that is already in "Last, First" form, so `Smith, John` is written `John, Smith,`.
-- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch.
+- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch. A separate fix is proposed; see [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness).
 - The importer splits authors at every " and " and keywords at every comma, braces or not. A MeSH term such as `Neoplasms, Experimental` comes back as two keywords.
 - Only the first line of a study type is read back from `note`, and only a four-digit year from `year`.
 - The tokenizer does not read parenthesis-delimited entries (`@article(…)`), `@string` macros or `#` concatenation. A bare value that contains a brace ends field parsing for its entry. A long run of `@` without a `{` takes quadratic time.
@@ -1000,6 +1004,124 @@ Each item is separate work, and none of it is part of this change:
 
   Not done here, and no workflow or spec list changed.
 - **External-tool behaviour.** How biber, Zotero and JabRef treat a PaperLume field was not observed; see [Evidence](#evidence).
+
+## BibTeX citation-key uniqueness
+
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-BIBTEX-CITEKEY-UNIQUENESS-001` is based on `main` `ded56c63` and rated P2, for bibliographic data integrity. It is a first-party defect that no CodeQL rule reports, and no dependency changes. Until the fix merges and deploys, `main` and Production still give citation keys as described under "The defect".
+
+### The defect
+
+Every BibTeX entry starts with a citation key. `generateCiteKey` in `src/lib/exportUtils.ts` builds a base key from the first author's last name, the year and the first significant title word, such as `Smith2024_Alpha`. It gives the base key if no earlier entry in the file has it, and otherwise the first free one of the base key followed by `a` to `z`. When all 27 were taken, it gave `${baseKey}_${Date.now()}` without checking that key against the others. That fallback dates from the first BibTeX exporter, `f9e60fe` (2026-03-05).
+
+- **Repeated keys.** Papers that reach the fallback in the same millisecond get the same key, and an export is fast enough for most of them to: 1,000 papers took about 16 ms in the measurements below.
+- **Clock-dependent files.** Two exports of the same papers differ.
+- **When it happens.** It takes 28 papers with the same first-author surname, year and first significant title word. Fewer are enough when other papers' keys already took some of the 26 letters. Papers titled "Alphaa" to "Alphaz" take every letter of `Smith2024_Alpha`, and the second paper titled "Alpha…" then reaches the fallback.
+- **Effect.** A repeated key is a duplicate entry. When such a key is cited, `bibtex.web` 0.99e reports the second entry as a repeated entry and skips it, even when the two keys differ only in letter case.
+
+Reproduced on `main` `ded56c63` with the real exporter. The keys were read from the exported bytes with a separate structural reader:
+
+| Export | Entries | Distinct keys | Keys written more than once | Surplus entries |
+|---|---|---|---|---|
+| 30 papers sharing one base key, clock frozen | 30 | 28 | 1: `Smith2024_Alpha_1795560229306`, 3 times | 2 |
+| 3,000 papers in 100 such groups of 30, clock frozen | 3,000 | 2,800 | 100 | 200 |
+| The same 3,000 papers, real clock, 5 exports | 3,000 | 2,802 to 2,804 | 100 in each | 196 to 198 |
+| 3,000 papers sharing one base key, real clock, 1 export | 3,000 | 70 | 43, one of them 113 times | 2,930 |
+
+The five real-clock exports gave five different files, and the same 30 papers exported at two frozen clock readings gave two different files.
+
+### The fix
+
+The base key, its derivation and the letters `a` to `z` are unchanged. Only what follows `z` changes:
+
+- **Numbered keys.** After the letters come `_1`, `_2`, `_3` and so on: the lowest number whose key the file does not hold yet. Nothing reads the clock, draws a random number or hashes a record, so the same papers in the same order get the same keys in every export.
+- **One authority.** A set of every key already written to the file decides whether a key is free. Every candidate is checked against it: a base key, a letter-suffixed key or a numbered key, whichever paper's key it would repeat. A base key that another paper's suffixed key already took, or the reverse, gets the next free candidate, as before.
+- **A cursor per base key.** It records where that base key's numbered search resumes: the number given out last. Every lower number is already in the file. The search starts there, finds that number taken and moves on. A large group therefore costs about two lookups per numbered key instead of a scan of every number it used before. The cursor never decides that a number is free: the set does.
+- **Scope.** Keys are unique within one exported file. Nothing is stored and the database is untouched. A key is not an identity across exports: adding, removing or reordering papers changes which paper gets which suffix, as before. The importer does not keep keys and is unchanged.
+
+**Why `_1`, `_2`, `_3`.** The numbered key keeps the old fallback's shape: the base key, an underscore and digits, so `Smith2024_Alpha_1795560229306` becomes `Smith2024_Alpha_1`. It also cannot equal any other key the exporter writes. The author part keeps only ASCII letters, the year part is a number as JavaScript prints it or `nd`, and the title word keeps only ASCII letters and digits. So a base key or a letter-suffixed key has exactly one underscore, and a numbered key has two; a title "Alpha_1" gives `Smith2024_Alpha1`. The set still checks every numbered key, so uniqueness does not rest on that argument alone. Two alternatives were not taken:
+
+- More letters (`aa`, `ab` and so on) would be a new convention, and such keys can equal other titles' base keys: a title "Alphaaa" gives `Smith2024_Alphaaa`.
+- One counter shared by every base key would make one group's numbers depend on every other group, so adding a paper to one group would renumber another.
+
+**What changes in a file.** Only the keys that `main` would have ended with a timestamp. Every other key, and every field value, is unchanged.
+
+### Key syntax and letter case
+
+- **Syntax.** A numbered key adds only an underscore and digits to its base key. `bibtex.web` ends a brace-delimited entry's key at a comma, a right brace or white space, and the exporter's keys contain none of these. Every key in the tests and the corpus below uses only ASCII letters, digits and `_`, plus, as on `main`, `-` for a negative year and `.` or `+` when a runtime year is a number such as `2020.5` or `1e21`. The `year` column holds integers, so those last numbers are not reachable through the typed API.
+- **A year that is not a number at runtime** still gives `nd` in the key, and its `year` field is still encoded as text, as PR #374 made it, at every position in a group.
+- **Letter case.** Uniqueness here means that no two keys in a file are the same string. `bibtex.web` 0.99e compares keys without regard to case. So `Smith2024_Alpha` and `Smith2024_alpha`, from titles starting "Alpha" and "alpha", are different keys here but a repeated entry to BibTeX. The letter suffixes can make such pairs too, such as `Smith2024_AlphAa` and `Smith2024_Alphaa`. Both existed before, and this change keeps key casing and author normalization as they are. A numbered key can match another key in all but case only when their base keys do. The corpus below mixes "Alpha" and "alpha" on purpose: BibTeX would treat 381 of its 3,000 entries as repeats in `main`'s file and 162 in the patched one, all of those 162 for letter case alone. How biber, Zotero, JabRef or other tools compare keys was not checked.
+
+### Verification
+
+- **Tests.** `src/lib/__tests__/exportBibTeX.integrity.test.ts` grows from 72 to 92 tests. The 20 new tests read every key from the exported bytes with the suite's structural reader, because the importer does not keep keys. They compare those keys with keys written out from the rule above. They cover:
+  - one paper, byte for byte as `main` writes it; two papers; 27 papers, which use the base key and `a` to `z`; 28, which adds `_1`; then 29, 30 and 40;
+  - 3,000 papers with one base key: 3,000 distinct keys, the last `Smith2024_Alpha_2973`, every paper in its own entry with its own fields, and all 3,000 read back;
+  - a frozen clock, four clock readings and the real clock, which give byte-identical files, and repeated exports of the same papers;
+  - three groups, one after another and interleaved, each numbered from `_1`;
+  - base keys that other papers' suffixed keys took, and the reverse, and all 26 letters taken by other papers;
+  - a title "Alpha_1";
+  - a seeded comparison over 2,880 papers with the rule applied one candidate at a time, in which numbered keys and collisions between groups both occur;
+  - one record exported 30 times, papers with no author, no year or no usable title word, and an empty export;
+  - a runtime year that is not a number across a group of 28, and unusual runtime numbers in the year;
+  - a group in which DOIs and URLs move to PaperLume fields. Its summary counts are as before, and its file is the papers' single exports with only the keys replaced.
+
+  15 of the 20 fail on `main`. The other 5 pin what `main` already does: one, two and 27 papers, the empty export, and the linear-work bound below.
+- **Negative controls.** 23 weakened copies of `exportUtils.ts` were run against six suites through a scratch alias, without changing the repository. Each copy fails the new tests. An unmodified copy passes all 20 new tests and the other 729 tests of those suites.
+
+  | Controls | Weakened copy | New tests failing, of 20 |
+  |---|---|---|
+  | A | The `Date.now()` fallback restored, as on `main` | 15 |
+  | B1–B3 | No uniqueness check for the base key, the letters or the numbers | 17, 16, 11 |
+  | C1–C3 | A base, letter or numbered key given out without being recorded | 17, 16, 11 |
+  | D1 | The cursor never stored, so every numbered search starts again at `_1` | 1, the linear-work bound: the keys are the same, the work quadratic |
+  | D2–D4 | The cursor skips numbers, is shared by every base key, or starts at 0 | 11, 2, 15 |
+  | E1–E5 | Letters from `b`, `-` for `_`, no letters, a lower-cased base key, numbered keys without `_` | 17, 18, 17, 18, 15 |
+  | F1–F4 | Numbers that depend on `Date.now()`, start at the timestamp, or depend on `performance.now()` or `new Date()` | 8, 15, 9, 9 |
+  | G1–G3 | A base key or a letter checked only within its own group; numbered keys from separate groups that coincide | 2, 2, 15 |
+
+  Each F control fails the test that exports at four fixed clock readings, whose `Date.now()` and `performance.now()` values are odd and even, so that failure does not depend on the real clock. Their totals vary from run to run, because other tests use the real clock. The other 729 tests of the six export-related suites catch only E2 and E4, through the pinned bytes of ordinary records. They catch none of the other 21.
+- **Performance.** Whole exports in jsdom on the development machine, the median of 9 runs, with every `Set` lookup counted. The machine's load average was 9 to 19, so differences of a few milliseconds are noise.
+
+  | Workload | Papers | Lookups, `main` | Lookups, patched | Lookups, D1 | ms, `main` | ms, patched | ms, D1 |
+  |---|---|---|---|---|---|---|---|
+  | No shared base key | 3,000 | 40,891 | 40,891 | 40,891 | 44.2 | 42.1 | 42.7 |
+  | One base key | 1,000 | 38,540 | 40,485 | 512,391 | 15.9 | 16.6 | 71.6 |
+  | One base key | 3,000 | 118,540 | 124,485 | 4,539,391 | 50.3 | 47.6 | 558.8 |
+  | One base key | 10,000 | 398,540 | 418,485 | 50,133,891 | 166.2 | 175.6 | 8,055.4 |
+  | 10 base keys of 300 | 3,000 | 115,381 | 120,831 | 489,391 | 45.3 | 47.8 | 113.4 |
+  | 100 base keys of 30 | 3,000 | 83,791 | 84,291 | 84,391 | 40.7 | 45.3 | 48.8 |
+
+  The patched exporter makes about two more lookups per numbered key than `main`, which called `Date.now()` there instead. Without the cursor (D1), lookups grow with the square of a group's size. The suite checks this with operation counts, not timings: a group of 3,000 must take fewer than four times the lookups of a group of 1,000. Linear work takes three times as many, and D1 about nine.
+- **Field values, summaries and other formats.** A 3,000-record synthetic corpus was exported by `main` and by the patched exporter, with the clock frozen. The corpus mixes hostile text, token-like and unbalanced DOIs and links, PMIDs, runtime years that are not numbers, non-ASCII and empty author lists, and large groups whose base keys collide with each other's suffixed keys.
+  - **BibTeX.** All 3,000 entries have the same type and fields, field for field. 262 keys changed, and they are exactly the 262 keys that ended in the frozen clock, each now numbered under the same base key. The patched file is `main`'s file with only those keys replaced, byte for byte: 1,251,593 B against 1,254,604 B. `main`'s file had 15 keys written more than once, for 247 surplus entries, and the patched file has none. The export summary is identical: 3,000 papers, 1,066 affected, 1,032 DOI fields and 57 URL fields.
+  - **Each record alone.** All 3,000 single-record exports are byte-identical.
+  - **CSV and RIS.** Byte-identical: 556,671 B and 838,851 B. So are the empty exports. `escapeCSV`, `serializeCSVCell`, `exportToCSV` and `exportToRIS` are unchanged, and no byte order mark is added.
+- **Build.** No dependency changed: `package.json` and `package-lock.json` are byte-identical to `main`'s. The code commit `15b986cf` and `main` `ded56c63` were each built in a clean worktree, with the same installed packages:
+  - Of the web build's 9 files, 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name.
+  - The entry chunk grows by 63 B (+33 B with `gzip -9`). It differs in one region of about 1,760 characters, which holds `generateCiteKey` and `exportToBibTeX`: the numbered search replaces `Date.now()`, the new `Map` is passed in, and local names in those two functions change. The other 1,983,410 characters are identical. So the URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
+  - The extension output's 8 files, and its packaged archive (`0feb935d…`), are byte-identical.
+
+### Not verified
+
+- **External tools.** No BibTeX program, biber or reference manager is installed here. The key grammar and BibTeX's case-insensitive comparison come from reading `bibtex.web` 0.99e, not from running it. No claim is made about how any reference manager treats these keys.
+- **Production.** No Production export or import was run, and no Production data was read, so the share of real libraries that reach the fallback is unknown.
+- **End to end.** No CI lane imports or exports BibTeX (see [Browser qualification](#browser-qualification)). The tests of exported bytes above are the qualification for this change, and no browser run was made.
+
+### What remains
+
+Each item is separate work, and none of it is part of this change:
+
+- **Keys that differ only in letter case**, which BibTeX reads as one key; see "Key syntax and letter case". Changing that would change the keys of ordinary records, so it needs a product decision.
+- **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
+- **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- **The search cache after an import** (`PAPERLUME-POST-IMPORT-SEARCH-CACHE-001`): a search repeated within 30 s of an import hides the papers just imported; see [Browser qualification](#browser-qualification).
+- **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
+- **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
+- **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
+- **E2E spec coverage** (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`); see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
+- **E2E runtime.** The `e2e-local` lane runs close to its job timeout, and `touch-tablet-ux.spec.ts:664` has flaked in recent runs.
+- **Notification semantics and lifecycle.** The compatibility notice uses the error-styled warning tier, there is no per-message lifetime, and Escape after Alt+T does not restart a notice's timer; see [The export notice](#the-export-notice) and [Browser qualification](#browser-qualification).
+- **Superseded Dependabot pull requests.** PRs 351–354 are still open.
 
 ## NanoID finding — REMEDIATED
 
