@@ -1007,7 +1007,7 @@ Each item is separate work, and none of it is part of this change:
 
 ## BibTeX citation-key uniqueness
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-BIBTEX-CITEKEY-UNIQUENESS-001` is based on `main` `ded56c63` and rated P2, for bibliographic data integrity. It is a first-party defect that no CodeQL rule reports, and no dependency changes. Until the fix merges and deploys, `main` and Production still give citation keys as described under "The defect".
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-BIBTEX-CITEKEY-UNIQUENESS-001` and its revision 001A are based on `main` `ded56c63` and rated P2, for bibliographic data integrity. It is a first-party defect that no CodeQL rule reports, and no dependency changes. Until the fix merges and deploys, `main` and Production still give citation keys as described under "The defect".
 
 ### The defect
 
@@ -1029,27 +1029,45 @@ Reproduced on `main` `ded56c63` with the real exporter. The keys were read from 
 
 The five real-clock exports gave five different files, and the same 30 papers exported at two frozen clock readings gave two different files.
 
+**Keys that differ only in letter case.** Independent review of the first fix (`28cfc22e`) found a second defect, which `main` has too: keys were compared as exact strings. Titles that start "Alpha" and "alpha", or first authors "John Smith" and "john smith", give `Smith2024_Alpha` and `Smith2024_alpha`, or `smith2024_Alpha`. These are different strings, but BibTeX treats them as one database key (see [Key syntax and letter case](#key-syntax-and-letter-case)). When such a key is cited, or under `\nocite{*}`, BibTeX reports the second entry as a repeated entry and skips the rest of it. A citation meant for the second paper then finds the first.
+
+Reproduced on 2026-11-25 on `main` `ded56c63` and on `28cfc22e` with the real exporter and the clock frozen. The keys were read from the exported bytes with the structural reader of the integrity tests:
+
+| Export | Entries | Distinct keys, `main` / `28cfc22e` | Distinct up to letter case, `main` / `28cfc22e` | Entries BibTeX reads as repeats, `main` / `28cfc22e` |
+|---|---|---|---|---|
+| Titles "Alpha" and "alpha", one author | 2 | 2 / 2 | 1 / 1 | 1 / 1 |
+| First authors "John Smith" and "john smith" | 2 | 2 / 2 | 1 / 1 | 1 / 1 |
+| "John Smith", "Alpha" and "JOHN SMITH", "ALPHA" | 2 | 2 / 2 | 1 / 1 | 1 / 1 |
+| Titles "Alpha", "Alpha", "alpha", "alpha": letter suffixes too | 4 | 4 / 4 | 2 / 2 | 2 / 2 |
+| 30 papers titled "Alpha", then 30 "alpha" | 60 | 56 / 60 | 28 / 30 | 32 / 30 |
+| 3,000 papers, six spellings of one base key | 3,000 | 168 / 3,000 | 28 / 500 | 2,972 / 2,500 |
+
 ### The fix
 
-The base key, its derivation and the letters `a` to `z` are unchanged. Only what follows `z` changes:
+The base key, its derivation and the letters `a` to `z` are unchanged. What follows `z`, and how two keys are compared, change:
 
 - **Numbered keys.** After the letters come `_1`, `_2`, `_3` and so on: the lowest number whose key the file does not hold yet. Nothing reads the clock, draws a random number or hashes a record, so the same papers in the same order get the same keys in every export.
-- **One authority.** A set of every key already written to the file decides whether a key is free. Every candidate is checked against it: a base key, a letter-suffixed key or a numbered key, whichever paper's key it would repeat. A base key that another paper's suffixed key already took, or the reverse, gets the next free candidate, as before.
-- **A cursor per base key.** It records where that base key's numbered search resumes: the number given out last. Every lower number is already in the file. The search starts there, finds that number taken and moves on. A large group therefore costs about two lookups per numbered key instead of a scan of every number it used before. The cursor never decides that a number is free: the set does.
+- **One authority, compared up to letter case.** A set of every key already written to the file decides whether a key is free. A key is free only if no key in the file is the same up to letter case. Every candidate is checked against the set: a base key, a letter-suffixed key or a numbered key, whichever paper's key it would repeat and whatever its capitals. The set holds each key in lower case, and one helper, `claimCiteKey`, both looks a candidate up and records it in that form, so a lookup and a record cannot disagree. A base key that another paper's suffixed key already took, or the reverse, gets the next free candidate, as before, now also when the two differ only in capitals.
+- **Capitals are kept.** Lower case is only the form in which keys are compared. A key is written with the capitals it was built with, and a suffix is added to the candidate as built. Papers whose keys would be `Smith2024_Alpha`, `Smith2024_alpha` and `SMITH2024_ALPHA`, in that order, get `Smith2024_Alpha`, `Smith2024_alphaa` and `SMITH2024_ALPHAb`: three keys that differ up to letter case, each with its own capitals. A key that collides with nothing is written exactly as before.
+- **A cursor per base key, up to letter case.** It records where that base key's numbered search resumes: the number given out last. Every lower number is already in the file. The search starts there, finds that number taken and moves on. Base keys that differ only in capitals share one cursor, because their numbered keys are the same up to letter case, so a paper with another spelling resumes the group's search instead of starting again at `_1`. A large group therefore costs about two lookups per numbered key, whatever its spellings, instead of a scan of every number it used before. The cursor never decides that a number is free: the set does.
 - **Scope.** Keys are unique within one exported file. Nothing is stored and the database is untouched. A key is not an identity across exports: adding, removing or reordering papers changes which paper gets which suffix, as before. The importer does not keep keys and is unchanged.
+
+**Why lower case, and only for comparing.** Every key is ASCII (see "Key syntax and letter case"), so lowercasing it folds exactly the letters BibTeX folds, `A` to `Z`. Writing every key in lower case instead would also make keys unique up to letter case. But it would change every key that has a capital, in every export, including the many that collide with nothing and that documents may already cite.
 
 **Why `_1`, `_2`, `_3`.** The numbered key keeps the old fallback's shape: the base key, an underscore and digits, so `Smith2024_Alpha_1795560229306` becomes `Smith2024_Alpha_1`. It also cannot equal any other key the exporter writes. The author part keeps only ASCII letters, the year part is a number as JavaScript prints it or `nd`, and the title word keeps only ASCII letters and digits. So a base key or a letter-suffixed key has exactly one underscore, and a numbered key has two; a title "Alpha_1" gives `Smith2024_Alpha1`. The set still checks every numbered key, so uniqueness does not rest on that argument alone. Two alternatives were not taken:
 
 - More letters (`aa`, `ab` and so on) would be a new convention, and such keys can equal other titles' base keys: a title "Alphaaa" gives `Smith2024_Alphaaa`.
 - One counter shared by every base key would make one group's numbers depend on every other group, so adding a paper to one group would renumber another.
 
-**What changes in a file.** Only the keys that `main` would have ended with a timestamp. Every other key, and every field value, is unchanged.
+**What changes in a file.** Compared with `main`: the keys that `main` would have ended with a timestamp, and the keys that would repeat an earlier key up to letter case. Compared with the first fix (`28cfc22e`), nothing changes in a file in which no two base keys differ only in capitals. In a file in which some do, a key changes when it would repeat an earlier key up to letter case. Later keys of the same group can then move on to the next suffix, because an earlier paper now holds the one they had. Every other key, and every field value, is unchanged.
 
 ### Key syntax and letter case
 
 - **Syntax.** A numbered key adds only an underscore and digits to its base key. `bibtex.web` ends a brace-delimited entry's key at a comma, a right brace or white space, and the exporter's keys contain none of these. Every key in the tests and the corpus below uses only ASCII letters, digits and `_`, plus, as on `main`, `-` for a negative year and `.` or `+` when a runtime year is a number such as `2020.5` or `1e21`. The `year` column holds integers, so those last numbers are not reachable through the typed API.
 - **A year that is not a number at runtime** still gives `nd` in the key, and its `year` field is still encoded as text, as PR #374 made it, at every position in a group.
-- **Letter case.** Uniqueness here means that no two keys in a file are the same string. `bibtex.web` 0.99e compares keys without regard to case. So `Smith2024_Alpha` and `Smith2024_alpha`, from titles starting "Alpha" and "alpha", are different keys here but a repeated entry to BibTeX. The letter suffixes can make such pairs too, such as `Smith2024_AlphAa` and `Smith2024_Alphaa`. Both existed before, and this change keeps key casing and author normalization as they are. A numbered key can match another key in all but case only when their base keys do. The corpus below mixes "Alpha" and "alpha" on purpose: BibTeX would treat 381 of its 3,000 entries as repeats in `main`'s file and 162 in the patched one, all of those 162 for letter case alone. How biber, Zotero, JabRef or other tools compare keys was not checked.
+- **Database keys.** Section 268 of `bibtex.web` 0.99e makes two entries with the same database key illegal, and keys that differ only in letter case count as the same key. Section 267 looks each database key up in lower case, and section 268 reports a repeat as `Repeated entry` and skips the rest of it. This was read in the source fetched from CTAN and in its typeset edition, dated March 2, 2026 (`tug.ctan.org/info/knuth-pdf/bibtex/bibtex.pdf`). BibTeX's `lower_case` procedure folds only `A` to `Z`. The check applies to a key that is cited, and to every entry under `\nocite{*}`.
+- **Citation commands are a separate rule.** For `\citation` arguments, letter case matters (sections 132 and 135). Two cite keys that differ only in case are an error, but a cite key need not match the case of the database key it finds. This fix concerns only the database keys of one exported file: no two of them may be the same up to letter case.
+- **The comparison here.** Keys are compared in lower case, which for ASCII keys is BibTeX's own fold. A file whose keys are unique up to letter case is also unique as written, so a tool that compares keys exactly finds no repeats in it either. How biber, Zotero, JabRef or other tools compare keys was not checked, and no claim is made beyond these two comparisons.
 
 ### Verification
 
@@ -1066,7 +1084,27 @@ The base key, its derivation and the letters `a` to `z` are unchanged. Only what
   - a group in which DOIs and URLs move to PaperLume fields. Its summary counts are as before, and its file is the papers' single exports with only the keys replaced.
 
   15 of the 20 fail on `main`. The other 5 pin what `main` already does: one, two and 27 papers, the empty export, and the linear-work bound below.
-- **Negative controls.** 23 weakened copies of `exportUtils.ts` were run against six suites through a scratch alias, without changing the repository. Each copy fails the new tests. An unmodified copy passes all 20 new tests and the other 729 tests of those suites.
+
+  Revision 001A adds 22 tests, so the file has 114. Each reads the keys from the exported bytes and checks that they are unique both as written and up to letter case: `new Set(keys).size` and `new Set(keys.map((key) => key.toLowerCase())).size` both equal the number of entries, and every key is printable ASCII. The keys are compared with keys written out from the rule. The 22 cover:
+  - titles, first authors, or both, that differ only in capitals, in either order, including `Smith2024_Alpha`, `Smith2024_alphaa`, `SMITH2024_ALPHAb`;
+  - keys that collide with nothing, which are written exactly as an export of their paper alone writes them, capitals included. Among them are keys that would be alike without their punctuation, such as `Smith-44_Beta` and `Smith44_Beta`;
+  - a case-only collision with a letter-suffixed key. Also a natural base key that another spelling's suffixed key took, the reverse, and all 26 letters taken by other spellings;
+  - more than 27 papers of mixed capitals in one group, one numbering continued across spellings, and three interleaved groups of mixed capitals, each numbered on its own;
+  - 3,000 papers sharing one base key in twelve spellings: 3,000 keys, every paper in its own entry with its own fields, and all 3,000 read back;
+  - the work: as many lookups for a group whatever capitals its base keys have, and linear growth when every paper has its own spelling;
+  - repeated exports, and four fixed clock readings and the real clock, all giving byte-identical files;
+  - a paper that collides only up to capitals: its key changes, and no other key does;
+  - every field value, hostile text included: each entry is its paper's single export with only the key replaced. DOIs and URLs in PaperLume fields are counted as before, and runtime years that are not numbers stay inside their entries;
+  - every key looked up in lower case, and found free, just before it is recorded;
+  - a seeded comparison over 2,880 papers with the rule applied one candidate at a time, comparing keys as `bibtex.web`'s `lower_case` folds them. Numbered keys and keys taken only up to letter case both occur in it.
+
+  19 of the 22 fail on `28cfc22e`, and 20 on `main`. The ones that pass pin what those already do:
+  - keys that collide with nothing;
+  - on `28cfc22e`, groups of one spelling;
+  - the linear bound when every paper has its own spelling, which `main` and `28cfc22e` meet by writing those keys unchanged.
+- **Negative controls.** Weakened copies of `exportUtils.ts` were run through a scratch alias, without changing the repository. The first fix used 23. Revision 001A ports those 23 to the revised code and adds 11 for letter case. Each of the 34 copies was run against the 114 tests of the integrity suite and the other five export and import suites. Each copy fails new tests. An unmodified copy passes all 22 + 20 citation-key tests and the other 729 tests of those six suites.
+
+  The first fix's 23 controls, as measured for that fix:
 
   | Controls | Weakened copy | New tests failing, of 20 |
   |---|---|---|
@@ -1080,6 +1118,30 @@ The base key, its derivation and the letters `a` to `z` are unchanged. Only what
   | G1–G3 | A base key or a letter checked only within its own group; numbered keys from separate groups that coincide | 2, 2, 15 |
 
   Each F control fails the test that exports at four fixed clock readings, whose `Date.now()` and `performance.now()` values are odd and even, so that failure does not depend on the real clock. Their totals vary from run to run, because other tests use the real clock. The other 729 tests of the six export-related suites catch only E2 and E4, through the pinned bytes of ordinary records. They catch none of the other 21.
+
+  Revision 001A's 34 controls, against the 22 letter-case tests and the 20 earlier ones. The letters in the second column are the controls the revision's brief asked for:
+
+  | Control | For | Weakened copy | Failing, of 22 | Failing, of 20 |
+  |---|---|---|---|---|
+  | CA | A | Keys compared exactly again, the rule of `28cfc22e` | 19 | 0 |
+  | CB | B | Lookups in lower case, records as written | 19 | 17 |
+  | CC | C | Records in lower case, lookups as written | 19 | 17 |
+  | CD | D | Letter-suffixed candidates compared and recorded exactly | 16 | 2 |
+  | CE | E | Numbered candidates compared and recorded exactly | 11 | 0 |
+  | CF, CF2 | F | Every key, or every suffixed key, written in lower case | 19, 17 | 18, 16 |
+  | CG | G | The numbered search kept per spelling: same keys, more work | 2, the two work tests | 0 |
+  | CH | H | A numbered key taken from the cursor without a lookup: same keys | 1, the lookup-before-record test | 0 |
+  | CJ1, CJ2 | J | Keys alike without punctuation treated as alike; every key of a group given the first paper's capitals | 3, 16 | 3, 0 |
+  | A (ported) | I | The `Date.now()` fallback restored | 13 | 15 |
+  | B1–B3 (ported) | H | No check for the base key, the letters or the numbers | 19, 16, 12 | 17, 16, 11 |
+  | C1–C3 (ported) | | A base, letter or numbered key given out without being recorded | 19, 16, 12 | 17, 16, 11 |
+  | D1 (ported) | | The cursor never stored: same keys, quadratic work | 1, the linear-work bound | 1 |
+  | D2–D4 (ported) | | The cursor skips numbers, is shared by every base key, or starts at 0 | 10, 2, 11 | 11, 2, 15 |
+  | E1–E5 (ported) | J | Letters from `b`, `-` for `_`, no letters, a lower-cased base key, numbered keys without `_` | 17, 19, 17, 19, 11 | 17, 18, 17, 18, 15 |
+  | F1–F4 (ported) | I | Numbers that depend on `Date.now()`, start at the timestamp, or depend on `performance.now()` or `new Date()` | 8, 12, 6, 7 | 6, 15, 9, 9 |
+  | G1–G3 (ported) | H | A base key or a letter checked only within its own group; numbered keys from separate groups that coincide | 3, 3, 12 | 2, 2, 15 |
+
+  CG and CH write the same keys as the revision, so only the work tests and the lookup-before-record test can see them. Every clock control fails the fixed-clock-readings test of both blocks. The other 729 tests catch only E2, E4 and CF, through the pinned bytes of ordinary records.
 - **Performance.** Whole exports in jsdom on the development machine, the median of 9 runs, with every `Set` lookup counted. The machine's load average was 9 to 19, so differences of a few milliseconds are noise.
 
   | Workload | Papers | Lookups, `main` | Lookups, patched | Lookups, D1 | ms, `main` | ms, patched | ms, D1 |
@@ -1092,18 +1154,57 @@ The base key, its derivation and the letters `a` to `z` are unchanged. Only what
   | 100 base keys of 30 | 3,000 | 83,791 | 84,291 | 84,391 | 40.7 | 45.3 | 48.8 |
 
   The patched exporter makes about two more lookups per numbered key than `main`, which called `Date.now()` there instead. Without the cursor (D1), lookups grow with the square of a group's size. The suite checks this with operation counts, not timings: a group of 3,000 must take fewer than four times the lookups of a group of 1,000. Linear work takes three times as many, and D1 about nine.
+
+  Revision 001A was measured again on 2026-11-25, the same way, with a load average of 7 to 15. The table compares `main`, `28cfc22e`, the revision and control CG, whose numbered search is kept per spelling:
+
+  | Workload | Papers | Lookups, `main` | `28cfc22e` | Revision | CG | ms, `main` | `28cfc22e` | Revision |
+  |---|---|---|---|---|---|---|---|---|
+  | No shared base key | 3,000 | 40,891 | 40,891 | 40,891 | 40,891 | 43.9 | 40.4 | 41.5 |
+  | One base key, one spelling | 3,000 | 118,540 | 124,485 | 124,485 | 124,485 | 46.2 | 46.4 | 48.6 |
+  | One base key, one spelling | 10,000 | 398,540 | 418,485 | 418,485 | 418,485 | 165.1 | 180.3 | 183.4 |
+  | One base key, two spellings in turn | 3,000 | 118,189 | 124,079 | 124,485 | 127,456 | 45.6 | 46.7 | 49.1 |
+  | One base key, twelve spellings | 3,000 | 114,679 | 120,019 | 124,485 | 157,111 | 45.8 | 45.9 | 47.8 |
+  | One base key, twelve spellings | 10,000 | 394,679 | 414,019 | 418,485 | 528,111 | 172.6 | 178.4 | 178.9 |
+  | One base key, every paper its own spelling | 1,000 | 12,891 | 12,891 | 40,485 | 512,391 | 11.1 | 11.7 | 16.3 |
+  | One base key, every paper its own spelling | 3,000 | 40,891 | 40,891 | 124,485 | 4,539,391 | 35.4 | 35.3 | 47.2 |
+  | One base key, every paper its own spelling | 10,000 | 138,891 | 138,891 | 418,485 | 50,133,891 | 145.9 | 142.7 | 179.7 |
+  | Four groups of 2,500, mixed spellings, interleaved | 10,000 | 280,955 | 283,315 | 417,267 | 1,223,163 | 165.4 | 163.8 | 177.3 |
+
+  - **No change in ordinary work.** For an export without collisions, and for a group of one spelling, the revision makes exactly the lookups of `28cfc22e`.
+  - **Capitals cost nothing.** A group of 3,000 takes 124,485 lookups in the revision whatever its spellings, and 10,000 takes 418,485.
+  - **One spelling per paper.** Where every paper has its own spelling, `main` and `28cfc22e` did less work only because they wrote those keys unchanged: 3,000 keys that BibTeX reads as one. The revision gives them distinct keys for the cost of a one-spelling group.
+  - **Linear growth.** From 1,000 to 3,000 to 10,000 such papers, the revision's lookups grow 3.08 and 10.3 times. CG's grow 8.9 and 98 times, to 50.1 million.
+
+  The timings are informational; no limit is asserted on them. The suite checks two counts: as many lookups whatever capitals a group's base keys have, and fewer than four times the lookups from 1,000 to 3,000 papers that each have their own spelling.
 - **Field values, summaries and other formats.** A 3,000-record synthetic corpus was exported by `main` and by the patched exporter, with the clock frozen. The corpus mixes hostile text, token-like and unbalanced DOIs and links, PMIDs, runtime years that are not numbers, non-ASCII and empty author lists, and large groups whose base keys collide with each other's suffixed keys.
   - **BibTeX.** All 3,000 entries have the same type and fields, field for field. 262 keys changed, and they are exactly the 262 keys that ended in the frozen clock, each now numbered under the same base key. The patched file is `main`'s file with only those keys replaced, byte for byte: 1,251,593 B against 1,254,604 B. `main`'s file had 15 keys written more than once, for 247 surplus entries, and the patched file has none. The export summary is identical: 3,000 papers, 1,066 affected, 1,032 DOI fields and 57 URL fields.
   - **Each record alone.** All 3,000 single-record exports are byte-identical.
   - **CSV and RIS.** Byte-identical: 556,671 B and 838,851 B. So are the empty exports. `escapeCSV`, `serializeCSVCell`, `exportToCSV` and `exportToRIS` are unchanged, and no byte order mark is added.
+- **Compatibility of revision 001A with the first fix.** Three 3,000-record corpora were exported by `main`, `28cfc22e` and the revision, with the clock frozen.
+  - **How keys were checked.** They were read with a structural reader. Each record's base key was taken from its export alone, where it always gets its base key. Two separate reference implementations of the rule gave the expected keys: one compares keys as written, the other up to letter case. `28cfc22e`'s keys equal the first and the revision's the second, in every corpus.
+  - **No two base keys that differ only in capitals.** This is the corpus above without the title "alpha". The revision's BibTeX file is byte-identical to `28cfc22e`'s: 1,251,769 B.
+  - **The corpus above, which mixes "Alpha" and "alpha".** `28cfc22e`'s 3,000 keys are distinct as written but only 2,838 up to letter case. The revision's are 3,000 both ways. 344 keys changed:
+    - 162 repeated an earlier key up to letter case in `28cfc22e`'s file;
+    - 182 moved on because an earlier paper now holds their old key up to letter case;
+    - all 344 belong to the 6 groups whose base keys come in more than one spelling (351 papers).
+  - **A corpus of many spellings.** Its frequent title words come in up to four spellings, such as "Alpha", "alpha", "ALPHA" and "aLPHA". Its frequent first authors come in three spellings of one name and two of another. `28cfc22e`'s keys are 2,040 distinct up to letter case, and the revision's 3,000. 1,295 keys changed: 960 repeats and 335 that moved on, all in the 54 groups with more than one spelling (1,372 papers).
+  - **Everything else is unchanged.** In all three corpora, every entry has the same type and fields as in `main`'s and `28cfc22e`'s files. The revision's file is `28cfc22e`'s with only the keys replaced, byte for byte. The export summary, every single-record export, the CSV, the RIS and the empty exports are identical across `main`, `28cfc22e` and the revision.
 - **Build.** No dependency changed: `package.json` and `package-lock.json` are byte-identical to `main`'s. The code commit `15b986cf` and `main` `ded56c63` were each built in a clean worktree, with the same installed packages:
   - Of the web build's 9 files, 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name.
   - The entry chunk grows by 63 B (+33 B with `gzip -9`). It differs in one region of about 1,760 characters, which holds `generateCiteKey` and `exportToBibTeX`: the numbered search replaces `Date.now()`, the new `Map` is passed in, and local names in those two functions change. The other 1,983,410 characters are identical. So the URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
   - The extension output's 8 files, and its packaged archive (`0feb935d…`), are byte-identical.
 
+  Revision 001A's code commit `43d4667a` was built the same way, beside `main` `ded56c63` and `28cfc22e`:
+  - 7 of the web build's 9 files, the CSS included, are byte-identical in all three builds, and `index.html` differs only in the entry chunk's name.
+  - **Entry chunk size.** It is 1,985,988 B: 142 B more than `main`'s and 79 B more than `28cfc22e`'s. With `gzip -9` it is 21 B and 54 B smaller.
+  - **Why a byte comparison no longer localizes the change.** The two new top-level functions shift the short names the minifier gives other top-level functions throughout the chunk.
+  - **Token comparison.** The chunks were compared token by token, with local names masked and keywords, punctuation, property names, numbers, regular expressions, strings and template text kept. The revision's chunk then differs from `28cfc22e`'s in one region, 350 tokens against 383, which holds `generateCiteKey` and the two new helpers. Its 29,512 string and template literals are identical.
+  - **Un-minified builds.** Built without minification, the entry chunk's diff against `28cfc22e` is 4 hunks and 30 lines, and against `main` 6 hunks and 32 lines. All of them are in `generateCiteKey`, the two helpers, and the `Map` that `exportToBibTeX` passes in. So the URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
+  - The extension output's 8 files and its packaged archive (`0feb935d…`) are byte-identical in all three.
+
 ### Not verified
 
-- **External tools.** No BibTeX program, biber or reference manager is installed here. The key grammar and BibTeX's case-insensitive comparison come from reading `bibtex.web` 0.99e, not from running it. No claim is made about how any reference manager treats these keys.
+- **External tools.** No BibTeX program, biber or reference manager is installed here, and none was installed for this fix. The key grammar, and BibTeX's comparison of database keys up to letter case, come from reading `bibtex.web` 0.99e and its typeset edition, not from running it. No claim is made about how biber or any reference manager treats these keys.
 - **Production.** No Production export or import was run, and no Production data was read, so the share of real libraries that reach the fallback is unknown.
 - **End to end.** No CI lane imports or exports BibTeX (see [Browser qualification](#browser-qualification)). The tests of exported bytes above are the qualification for this change, and no browser run was made.
 
@@ -1111,7 +1212,6 @@ The base key, its derivation and the letters `a` to `z` are unchanged. Only what
 
 Each item is separate work, and none of it is part of this change:
 
-- **Keys that differ only in letter case**, which BibTeX reads as one key; see "Key syntax and letter case". Changing that would change the keys of ordinary records, so it needs a product decision.
 - **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
 - **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 - **The search cache after an import** (`PAPERLUME-POST-IMPORT-SEARCH-CACHE-001`): a search repeated within 30 s of an import hides the papers just imported; see [Browser qualification](#browser-qualification).
