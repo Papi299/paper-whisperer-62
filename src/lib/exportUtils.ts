@@ -151,6 +151,72 @@ export function exportToCSV(papers: PaperWithTags[]): void {
 }
 
 // ── RIS ──
+//
+// A RIS record is a sequence of lines. A line that starts with a tag (two
+// capitals, or a capital and a digit) followed by "  - " begins a field; the
+// record starts at its `TY` line and ends at its `ER` line. So a line break
+// inside a stored value must never be written as it is: the text after it would
+// start a line of its own, and text such as "ER  - " or "AU  - Name" there
+// would end the record or add a field. One exported paper could then come back
+// as several, with fields that were never stored.
+//
+// Every field that holds a stored value is therefore written by one of the two
+// functions below, which keep each value inside its field; only `TY` and `ER`
+// are fixed text. A value with no line break is written exactly as before. The
+// file keeps its line feeds, with no carriage return and no byte order mark,
+// and its file name and media type are unchanged.
+
+/**
+ * A line break inside a stored value: CR LF, CR or LF. Each is a line ending to
+ * at least one RIS reader (a lone CR, for instance, to readers that split lines
+ * the way Java's `BufferedReader` does), so none may reach the file inside a
+ * value. Other characters that some programs treat as line breaks, such as
+ * U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR and U+0085 NEXT LINE, are
+ * not RIS line endings and are written unchanged.
+ */
+const RIS_VALUE_LINE_BREAK = /\r\n|\r|\n/;
+const RIS_VALUE_LINE_BREAKS = /\r\n|\r|\n/g;
+
+/**
+ * The start of a continuation line: six spaces, the width of the tag column
+ * ("XX  - "), so that the text of a continuation lines up with the text of the
+ * line above it. A line that starts with a space cannot start a field, so text
+ * on a continuation line, "ER  - " included, stays part of its field. The
+ * importer takes up to six leading spaces as this indentation and anything
+ * after them as text.
+ */
+const RIS_CONTINUATION_INDENT = "      ";
+
+/**
+ * A field that holds one value: the title, year, journal, PMID, DOI, the three
+ * links, the abstract and the study-type note.
+ *
+ * The value's first line is written after the tag, and each further line on a
+ * continuation line of its own, so every character of the value is kept and
+ * this app's importer reads back the same lines, with LF between them where
+ * the value had CR LF or CR. Other readers decide for themselves how to join
+ * a continuation line to the field above it (with a space or a line break),
+ * and some keep a field such as `N1` as a list of separate notes.
+ */
+function risField(tag: string, value: unknown): string {
+  const [first, ...rest] = String(value).split(RIS_VALUE_LINE_BREAK);
+  return [`${tag}  - ${first}`, ...rest.map((line) => `${RIS_CONTINUATION_INDENT}${line}`)].join("\n");
+}
+
+/**
+ * One element of a repeated list field: an author, a keyword, MeSH term or
+ * substance, a tag or a project. RIS gives each element its own tagged line.
+ *
+ * An element is never continued on a further line, because readers disagree on
+ * what such a line means: rispy makes it a new author or keyword, and Zotero
+ * splits a keyword at it. So each line break inside an element (CR LF, CR or
+ * LF) is written as one space, and the element stays on one line: one author or
+ * keyword to any reader that reads one value per tagged line. The stored value
+ * is unchanged; only its exported text differs.
+ */
+function risListElement(tag: string, value: unknown): string {
+  return `${tag}  - ${String(value).replace(RIS_VALUE_LINE_BREAKS, " ")}`;
+}
 
 export function exportToRIS(papers: PaperWithTags[]): void {
   const entries = papers.map((p) => {
@@ -158,41 +224,45 @@ export function exportToRIS(papers: PaperWithTags[]): void {
 
     // Type & core fields
     lines.push("TY  - JOUR");
-    lines.push(`T1  - ${p.title}`);
-    p.authors.forEach((a) => lines.push(`AU  - ${a}`));
-    if (p.year) lines.push(`PY  - ${p.year}`);
-    if (p.journal) lines.push(`JO  - ${p.journal}`);
+    lines.push(risField("T1", p.title));
+    p.authors.forEach((a) => lines.push(risListElement("AU", a)));
+    if (p.year) lines.push(risField("PY", p.year));
+    if (p.journal) lines.push(risField("JO", p.journal));
 
     // Identifiers. `AN` is retained for reference managers that read it, but it
     // is no longer how a Paperlume RIS file conveys a PMID — `UR` below is —
     // and it is emitted only for a value that is syntactically a PMID. (This
     // says nothing about import: an incoming `AN` is still never trusted.)
+    // The DOI name is written as stored; a DOI that holds a line break, which
+    // no DOI name does, keeps its characters on a continuation line.
     const pmid = exportPmidFor(p);
-    if (pmid) lines.push(`AN  - ${pmid}`);
-    if (p.doi) lines.push(`DO  - ${p.doi}`);
+    if (pmid) lines.push(risField("AN", pmid));
+    if (p.doi) lines.push(risField("DO", p.doi));
 
     // URLs. `L2` is validated for the same reason `UR` is: a stored link is not
-    // trusted to be a usable http(s) link merely because it was stored.
+    // trusted to be a usable http(s) link merely because it was stored. Both
+    // are parsed URLs, which hold no line break; `L1` is the stored attachment
+    // link as it is.
     const url = exportUrlFor(p);
-    if (url) lines.push(`UR  - ${url}`);
+    if (url) lines.push(risField("UR", url));
     const journalUrl = toImportableExternalUrl(p.journal_url);
-    if (journalUrl) lines.push(`L2  - ${journalUrl}`);
-    if (p.drive_url) lines.push(`L1  - ${p.drive_url}`);
+    if (journalUrl) lines.push(risField("L2", journalUrl));
+    if (p.drive_url) lines.push(risField("L1", p.drive_url));
 
     // Abstract
-    if (p.abstract) lines.push(`AB  - ${p.abstract}`);
+    if (p.abstract) lines.push(risField("AB", p.abstract));
 
     // Keywords, MeSH terms, substances — all as KW
-    p.keywords.forEach((kw) => lines.push(`KW  - ${kw}`));
-    (p.mesh_terms || []).forEach((mt) => lines.push(`KW  - ${mt}`));
-    (p.substances || []).forEach((s) => lines.push(`KW  - ${s}`));
+    p.keywords.forEach((kw) => lines.push(risListElement("KW", kw)));
+    (p.mesh_terms || []).forEach((mt) => lines.push(risListElement("KW", mt)));
+    (p.substances || []).forEach((s) => lines.push(risListElement("KW", s)));
 
     // Study type as note
-    if (p.study_type) lines.push(`N1  - ${p.study_type}`);
+    if (p.study_type) lines.push(risField("N1", p.study_type));
 
     // User tags and projects in custom fields
-    p.tags.forEach((t) => lines.push(`C1  - ${t.name}`));
-    p.projects.forEach((pr) => lines.push(`C2  - ${pr.name}`));
+    p.tags.forEach((t) => lines.push(risListElement("C1", t.name)));
+    p.projects.forEach((pr) => lines.push(risListElement("C2", pr.name)));
 
     lines.push("ER  - ");
     return lines.join("\n");

@@ -314,34 +314,86 @@ interface RISEntry {
   tags: Array<{ tag: string; value: string }>;
 }
 
+/**
+ * A tag line: a two-character tag, two white-space characters, a hyphen, and
+ * the value, which may be empty. The tag is recognized by its shape, not from a
+ * list of the tags this parser reads, so an unfamiliar tag still begins a field
+ * of its own. The value may hold any character but a carriage return, including
+ * U+2028 and U+2029, which are not RIS line endings: a line holding one used to
+ * fail to match and was dropped, title and all.
+ */
+const RIS_TAG_LINE = /^([A-Z][A-Z0-9])\s\s-\s?([^\r]*)$/;
+
+/**
+ * A line shaped like a tag line that does not match one, such as `AU - Name`
+ * with one space before the hyphen, or a tag in lower case. It is malformed
+ * rather than a continuation, so it is ignored as before instead of being
+ * added to the field above it.
+ */
+const RIS_MALFORMED_TAG_LINE = /^[A-Za-z][A-Za-z0-9]\s+-/;
+
+/** The indentation of a continuation line: up to six leading spaces. */
+const RIS_CONTINUATION_INDENT = /^ {1,6}/;
+
+/**
+ * Reads the records of a RIS file, in order.
+ *
+ * A record starts at a `TY` line and ends at its `ER` line, or at the end of
+ * the file. Lines outside a record are ignored. Inside a record:
+ *
+ *   - a tag line begins a field;
+ *   - any other line continues the field above it, on a new line of that
+ *     field's value, so a value written over several lines (an abstract with
+ *     paragraphs, or a long field wrapped by the program that wrote the file)
+ *     is read whole. Up to six leading spaces are its indentation and are not
+ *     part of the value; whatever follows them is, even text that looks like a
+ *     tag, such as `      ER  - `, because a line that starts with a space
+ *     cannot start a field. An empty line is an empty line of the value;
+ *   - except that a malformed tag line (see `RIS_MALFORMED_TAG_LINE`) and a
+ *     line holding a lone carriage return, which some readers take as a line
+ *     ending and others do not, are ignored, as before.
+ *
+ * A value is trimmed as a whole, so white space inside a multi-line value is
+ * kept and a one-line value is read exactly as before. A `TY` line inside an
+ * unfinished record still starts a new record in its place.
+ */
 function parseRISEntries(content: string): RISEntry[] {
   const entries: RISEntry[] = [];
-  let currentEntry: RISEntry | null = null;
+  // Each field's physical lines, joined once the record is complete.
+  let currentEntry: Array<{ tag: string; lines: string[] }> | null = null;
+
+  const finish = (fields: Array<{ tag: string; lines: string[] }>): RISEntry => ({
+    tags: fields.map(({ tag, lines }) => ({ tag, value: lines.join("\n").trim() })),
+  });
 
   const lines = content.split(/\r?\n/);
 
   for (const line of lines) {
-    // Standard RIS line: "XX  - value" (value may be empty)
-    const match = line.match(/^([A-Z][A-Z0-9])\s\s-\s?(.*)$/);
+    const match = line.match(RIS_TAG_LINE);
     if (match) {
       const [, tag, value] = match;
       if (tag === "TY") {
-        currentEntry = { tags: [] };
-        currentEntry.tags.push({ tag, value: value.trim() });
+        currentEntry = [{ tag, lines: [value] }];
       } else if (tag === "ER") {
         if (currentEntry) {
-          entries.push(currentEntry);
+          entries.push(finish(currentEntry));
           currentEntry = null;
         }
       } else if (currentEntry) {
-        currentEntry.tags.push({ tag, value: value.trim() });
+        currentEntry.push({ tag, lines: [value] });
       }
+      continue;
+    }
+
+    // A continuation of the field above it, within the current record only.
+    if (currentEntry && !line.includes("\r") && !RIS_MALFORMED_TAG_LINE.test(line)) {
+      currentEntry[currentEntry.length - 1].lines.push(line.replace(RIS_CONTINUATION_INDENT, ""));
     }
   }
 
   // Handle entry without ER terminator
-  if (currentEntry && currentEntry.tags.length > 0) {
-    entries.push(currentEntry);
+  if (currentEntry && currentEntry.length > 0) {
+    entries.push(finish(currentEntry));
   }
 
   return entries;
