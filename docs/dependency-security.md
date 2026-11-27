@@ -1389,7 +1389,7 @@ The value's own leading spaces, trailing spaces, tabs and empty lines inside it 
 | An empty `DO`, or `DO  - doi:` or `DO  - https://doi.org/` alone, continued by `10.1000/xyz` | no DOI, or the prefix alone | saved as `10.1000/xyz` | as `main` |
 | `DO  - 10.1000/abc`, then `def` | `10.1000/abc` | `10.1000/abc` LF `def` | as the first Draft |
 
-Two fixtures differ from `main` with the revision for a reason that is not continuation. A `UR` tag line that ends in U+2028 now gives its PMID, and one that holds U+2028 inside its path gives a journal link with `%E2%80%A8` in it. `main` dropped both lines, because its tag pattern did not match U+2028. That is the first version's tag-line change, not a continuation; the URL parser percent-encodes U+2028, so it joins nothing.
+Two fixtures differ from `main` with the revision for a reason that is not continuation. A `UR` tag line that ends in U+2028 now gives its PMID, and one that holds U+2028 inside its path gives a journal link with `%E2%80%A8` in it. `main` dropped both lines, because its tag pattern did not match U+2028. That is the first version's tag-line change, not a continuation; the URL parser percent-encodes U+2028, so it joins nothing. The same change reads a one-line `DO` or `L1` that holds U+2028, which `main` also dropped. In the stored corpus below, that is 19 DOIs and 39 attachment links, all of them the value `u`, U+2028, `s`.
 
 **The policy.** As approved for this revision, an identifier is interpreted from the tag line it was written on, as before:
 - **`UR` and `L2`** are read from their tag lines alone, with the existing helpers, validation and normalization unchanged. So no URL is assembled from two lines, an incomplete tag line is not completed, the first PubMed record on a tag line still supplies the PMID, and `L2` still wins over a generic `UR`.
@@ -1406,7 +1406,7 @@ Each field keeps its tag-line value from the moment it is parsed (`RISField.tagL
 - The `safe_bulk_insert_papers` RPC resolves a duplicate, per user, by `pmid` equality and by `lower(doi)` equality. Those are the semantics of the unique indexes `idx_papers_user_pmid_unique` and `idx_papers_user_doi_unique`, per `20260903180000_add_deterministic_import_duplicate_resolution.sql`. Neither removes white space.
 - `canonicalDoiUrl` encodes an inner LF as `%0A`, and `doiEquivalenceKey` folds ASCII case only.
 
-So a DOI that keeps an inner line break is a deduplication identity of its own. Because no DOI name holds a control character, it can equal no other paper's DOI name. On `main`, the same stored value came back as its first line, a different DOI that looks valid and can match another paper. That was not a regression. But on the first Draft, a continuation after an empty, `doi:`-only or `https://doi.org/`-only tag line became, once the prefix was removed and the value trimmed, a DOI that no tag line stated. That is a new deduplication identity from continuation text alone, and the DOI-name check above is the field-specific correction. With it, every DOI saved from a continued `DO` either equals `main`'s or keeps a line break. That held for all 82 fixtures and both corpora below.
+So a DOI that keeps an inner line break is a deduplication identity of its own. Because no DOI name holds a control character, it can equal no other paper's DOI name. Keeping the line break is therefore not a regression: on `main`, the same stored value came back as its first line, a different DOI that looks valid and can match another paper. But on the first Draft, a continuation after an empty, `doi:`-only or `https://doi.org/`-only tag line became, once the prefix was removed and the value trimmed, a DOI that no tag line stated. That is a new deduplication identity from continuation text alone, and the DOI-name check above is the field-specific correction. With it, every DOI saved from a continued `DO` either equals `main`'s or keeps a line break. That held for all 82 fixtures and both corpora below.
 
 The DOI limits:
 - CR LF and CR become LF, and white space around the value is trimmed, so a multi-line DOI is not kept character for character where those apply.
@@ -1458,13 +1458,18 @@ The brief's controls E, removing all continuation handling, and K, letting a con
   - Every DOI, attachment link and year matches hand-stated expectations: 0 mismatches.
   - The text fields, PMIDs, PubMed links and journal links equal the first Draft's.
   - The DOI differs from the first Draft's for 483 papers, the year for 388 and the attachment link for 928, each as the contract states.
+- **Record by record against `main`'s parser**, on the same file:
+  - 2,711 records are read by both, 238 only by the revision (titles that `main` skipped), and none only by `main`.
+  - The saved DOI equals `main`'s for 2,018 and keeps a line break for 674.
+  - The other 19 DOIs, and the 39 attachment links that differ, are the one-line U+2028 values above.
+  - PMIDs, PubMed links, journal links and years equal `main`'s.
 
 A 2,000-record third-party corpus covered single-line records, structured abstracts and multi-line titles and journals. It also covered wrapped authors and keywords, valid and malformed multi-line DOIs, and PubMed, generic, `L2` and `L1` links, plain and continued. Multiple `UR` lines, malformed lines and unknown tags complete it. It was read in LF (746,679 B) and CR LF (783,552 B):
 - Each parser gives 2,000 papers and no warnings.
 - The 500 single-line records are identical across all three.
 - For all 2,000, the PMID, PubMed link, journal link, attachment link and year equal `main`'s.
 - The saved DOI equals `main`'s or keeps a line break (279).
-- The text fields equal the first Draft's: 1,263 records read more text than on `main`.
+- The text fields equal the first Draft's, so 1,263 records keep text that `main` dropped.
 - The first Draft had changed an identifier, link or year in 1,435 of them.
 
 **Timing.** These are medians of 9 interleaved runs in jsdom, load average about 8.6. They are informational, and nothing asserts a time:
