@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1 merged that evening as `ded56c63`. CodeQL's analysis of that commit closed alerts 7 and 9–15 and left 10 open, and 10 were still open on 2026-11-25. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness), whose fix is proposed in a Draft pull request.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1 merged that evening as `ded56c63`. CodeQL's analysis of that commit closed alerts 7 and 9–15 and left 10 open, and 10 were still open on 2026-11-25. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness), whose fix merged on 2026-11-25 as `a9c40ea6`. CodeQL's analysis of that commit reported the same 10 open alerts, and 10 were still open on 2026-11-27. So is [RIS record integrity](#ris-record-integrity), whose fix is proposed in a Draft pull request.
 
 ## Current audit state
 
@@ -46,6 +46,8 @@ Dependabot closes an alert only after a change reaches `main`. This change shoul
 **After the CSV export hardening merged (2026-11-24).** PR #373, a first-party change with no dependency delta, merged at 09:40:45 UTC as `a110b4ce` (see [CSV formula injection](#csv-formula-injection-cwe-1236)). Re-measured on that commit at 10:10 UTC: `npm audit` 0 full and 0 production findings after a clean `npm ci`, **0 open Dependabot alerts**, 18 open CodeQL alerts and 0 secret-scanning alerts.
 
 **After the BibTeX codec merged (2026-11-24).** PR #374, a first-party change with no dependency delta, merged at 22:43:26 UTC as `ded56c63` (see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1)). Re-measured on 2026-11-25 between 06:10 and 06:35 UTC: `npm audit` on that commit found 0 full and 0 production findings after a clean `npm ci`, with `package-lock.json` SHA-256 `48869379…`, unchanged since the Zod 4 migration. GitHub showed **0 open Dependabot alerts**, 10 open CodeQL alerts and 0 secret-scanning alerts. The CodeQL count fell from 18 because that merge fixed alerts 7 and 9–15.
+
+**After the citation-key uniqueness fix merged (2026-11-25).** PR #375, a first-party change with no dependency delta, merged at 21:02:19 UTC as `a9c40ea6` (see [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness)). The post-merge qualification that evening reported `npm audit` 0 full and 0 production findings after a fresh `npm ci`, **0 open Dependabot alerts**, 10 open CodeQL alerts and 0 secret-scanning alerts. Re-measured on that commit on 2026-11-27 between 04:52 and 04:57 UTC: `npm audit` found 0 full and 0 production findings after a clean `npm ci`, with `package-lock.json` SHA-256 `48869379…`, unchanged since the Zod 4 migration. GitHub showed 0 open Dependabot alerts, 10 open CodeQL alerts (1–6, 8 and 16–18) and 0 secret-scanning alerts.
 
 A count is a measurement, not a standing property: advisory databases move, and a newly published advisory can reopen either graph without any change to this repository. Re-run the [verification commands](#verification-commands) rather than trusting this table.
 
@@ -707,7 +709,7 @@ The 18 open CodeQL alerts are outside this document's counts; see [Purpose and a
 Each is separate work. Only the BibTeX item has been done:
 
 - **No byte order mark.** Excel for Mac decodes a UTF-8 CSV without one as MacRoman, so `°C` shows as `¬∞C`. Adding one is deferred, because it changes the file for scripts that do not strip it.
-- **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import.
+- **RIS record boundaries.** RIS export writes each field after its tag without handling an embedded newline. An abstract containing a newline followed by RIS tag lines therefore ends the record early: one paper exported came back as two on re-import. A fix is proposed in a Draft pull request; see [RIS record integrity](#ris-record-integrity).
 - **BibTeX.** The codec findings, including DOI and URL fields written without escaping, are repair group Q1 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). Its fix merged on 2026-11-24 as `ded56c63`; see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
 - **CodeQL.** The CSV change moved no alert: 18 were open on `main` `a110b4ce`, as before it.
 - **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
@@ -975,7 +977,7 @@ The change removes the code the eight alerts point at: the replacement chain in 
 These existed before this work, and each is separate:
 
 - `toBibTeXAuthor` reorders a name that is already in "Last, First" form, so `Smith, John` is written `John, Smith,`.
-- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch. A separate fix is proposed; see [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness).
+- Once a citation key's base (first author, year and first significant title word) has been used 27 times, the next keys end in `Date.now()`. Two exports of such a library are then not byte-identical, and keys made in the same millisecond repeat. In the 3,000-record synthetic corpus, 13 keys appeared more than once, on `main` as on this branch. A separate fix merged on 2026-11-25 as `a9c40ea6`; see [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness).
 - The importer splits authors at every " and " and keywords at every comma, braces or not. A MeSH term such as `Neoplasms, Experimental` comes back as two keywords.
 - Only the first line of a study type is read back from `note`, and only a four-digit year from `year`.
 - The tokenizer does not read parenthesis-delimited entries (`@article(…)`), `@string` macros or `#` concatenation. A bare value that contains a brace ends field parsing for its entry. A long run of `@` without a `{` takes quadratic time.
@@ -986,7 +988,7 @@ These existed before this work, and each is separate:
 
 Each item is separate work, and none of it is part of this change:
 
-- **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
+- **RIS record boundaries**; see [RIS record integrity](#ris-record-integrity), whose fix is proposed in a Draft pull request.
 - **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 - **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
 - **Bundled dependency copies:** see [Vite's bundled `postcss-selector-parser`](#residual-vites-bundled-postcss-selector-parser) and [Vite's bundled `ws`](#residual-vites-bundled-ws).
@@ -1007,7 +1009,7 @@ Each item is separate work, and none of it is part of this change:
 
 ## BibTeX citation-key uniqueness
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-BIBTEX-CITEKEY-UNIQUENESS-001` and its revision 001A are based on `main` `ded56c63` and rated P2, for bibliographic data integrity. It is a first-party defect that no CodeQL rule reports, and no dependency changes. Until the fix merges and deploys, `main` and Production still give citation keys as described under "The defect".
+**Status: remediated.** `PAPERLUME-BIBTEX-CITEKEY-UNIQUENESS-001` and its revision 001A are based on `main` `ded56c63` and rated P2, for bibliographic data integrity. It is a first-party defect that no CodeQL rule reports, and no dependency changes. PR #375 merged at 21:02:19 UTC on 2026-11-25 as `a9c40ea6`, whose tree is the reviewed head's (`d4b6eee3`). Production `dpl_9HTMFXbpjaJCcFNUuXMYiRxq9361`, built from that commit, was READY at 21:02:50.729 UTC; see [After the merge](#after-the-merge). The sections below describe the defect as `main` and Production had it before that merge, and the fix as reviewed.
 
 ### The defect
 
@@ -1201,6 +1203,19 @@ The base key, its derivation and the letters `a` to `z` are unchanged. What foll
   - **Token comparison.** The chunks were compared token by token, with local names masked and keywords, punctuation, property names, numbers, regular expressions, strings and template text kept. The revision's chunk then differs from `28cfc22e`'s in one region, 350 tokens against 383, which holds `generateCiteKey` and the two new helpers. Its 29,512 string and template literals are identical.
   - **Un-minified builds.** Built without minification, the entry chunk's diff against `28cfc22e` is 4 hunks and 30 lines, and against `main` 6 hunks and 32 lines. All of them are in `generateCiteKey`, the two helpers, and the `Map` that `exportToBibTeX` passes in. So the URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
   - The extension output's 8 files and its packaged archive (`0feb935d…`) are byte-identical in all three.
+  - **How these sizes were measured.** The 1,985,988 B above comes from a build in a clean worktree, which has no `.env`. The same commit built in the main checkout, whose untracked `.env` adds the inlined `VITE_*` values, measures 1,986,248 B. Either way the chunk is 142 B larger than `main` `ded56c63` built the same way. These are local builds, not the files Production serves.
+
+### After the merge
+
+Recorded on 2026-11-27 for the merge of 2026-11-25. Items marked "reported" come from the post-merge qualification run that evening and were not repeated.
+
+- **Merge.** `a9c40ea67434686ee944bc1b64660a4d84188624`, at 21:02:19 UTC, with parents `ded56c63` and `10d16192` (the reviewed head). Its tree, `d4b6eee3f63c18154dff0cf4e4d1e1fb283a50b4`, is the head's. It changed the three reviewed files, +1,277 and −22 lines.
+- **Production.** `dpl_9HTMFXbpjaJCcFNUuXMYiRxq9361`, a Git deployment of `main` at `a9c40ea6`, was created at 21:02:23.150 UTC and READY at 21:02:50.729 UTC. On 2026-11-27 it was still READY, and all four Production aliases pointed at it.
+- **Served bundle** (reported). The entry chunk changed from `index-BY6WpFwt.js` to `index-j2ns-noc.js`. It grew 146 B as served and 142 B once the `VITE_VERCEL_*` values that Vercel inlines were set equal, the same delta as the local builds above; with `gzip -9` it is 24 B smaller. With those values set equal, the served chunk matched the local build of the head in the qualification's token comparison.
+- **Served allocator** (reported). The citation-key code of the served chunk passed 10 structural checks and 25 behavioral checks, the latter run in an isolated JavaScript realm. No Production export was made, so this qualifies the served code, not an export from a signed-in library. A signed-out smoke test passed 17 of 17 checks.
+- **CI on `main`.** The push runs of `a9c40ea6` all passed on their first attempt: Validate `45700603978` (Vitest 275 files, 9,355 tests; lint 0 errors, 18 warnings), DB Tests `45700604466`, Extension `45700604200` and CodeQL `45700603279`. E2E is not run on push. The scheduled E2E run `45805927931` on 2026-11-26 passed: `e2e-local` 292 passed and 1 flaky, `touch-tablet-ux.spec.ts:664`, the known flake; `e2e-evidence` passed.
+- **Security.** CodeQL's analysis of `a9c40ea6`, created at 21:04:27 UTC, reported 10 results: alerts 1–6, 8 and 16–18, the same as before the merge. Dependabot showed 0 open alerts and secret scanning 0, and `npm audit` found 0 full and 0 production findings; see [Current audit state](#current-audit-state).
+- **Unchanged limits.** Nothing below under "Not verified" changed with the merge: no BibTeX program or reference manager was run, and no CI lane imports or exports BibTeX, so no E2E test covers these keys.
 
 ### Not verified
 
@@ -1212,7 +1227,7 @@ The base key, its derivation and the letters `a` to `z` are unchanged. What foll
 
 Each item is separate work, and none of it is part of this change:
 
-- **RIS record boundaries**; see the [CSV residual findings](#residual-findings).
+- **RIS record boundaries**; see [RIS record integrity](#ris-record-integrity), whose fix is proposed in a Draft pull request.
 - **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 - **The search cache after an import** (`PAPERLUME-POST-IMPORT-SEARCH-CACHE-001`): a search repeated within 30 s of an import hides the papers just imported; see [Browser qualification](#browser-qualification).
 - **Saved filter presets.** Whether any stored preset exceeds the 1,000-entry bound is unmeasured; see the [Zod 4 migration](#zod-4-migration).
@@ -1221,6 +1236,246 @@ Each item is separate work, and none of it is part of this change:
 - **E2E spec coverage** (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`); see [BibTeX codec and record integrity](#bibtex-codec-and-record-integrity-codeql-q1).
 - **E2E runtime.** The `e2e-local` lane runs close to its job timeout, and `touch-tablet-ux.spec.ts:664` has flaked in recent runs.
 - **Notification semantics and lifecycle.** The compatibility notice uses the error-styled warning tier, there is no per-message lifetime, and Escape after Alt+T does not restart a notice's timer; see [The export notice](#the-export-notice) and [Browser qualification](#browser-qualification).
+- **Superseded Dependabot pull requests.** PRs 351–354 are still open.
+
+## RIS record integrity
+
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-RIS-RECORD-BOUNDARY-INTEGRITY-001` is based on `main` `a9c40ea6` and rated P3, for bibliographic data integrity. It repairs the RIS residual finding of the [CSV formula injection](#csv-formula-injection-cwe-1236) audit, which was found by reading the code, not by CodeQL. No CodeQL rule reports it, and no dependency changes. Until the fix merges and deploys, `main` and Production still export and import RIS as described under [What was wrong in RIS](#what-was-wrong-in-ris).
+
+| Field | Value |
+|---|---|
+| Weakness | CWE-93, improper neutralization of CRLF sequences: the line break separates RIS fields and records, and stored values were written without neutralizing it |
+| Classification | **P3**, bibliographic data integrity |
+| Where | `exportToRIS` in `src/lib/exportUtils.ts` (export) and `parseRISEntries` in `src/lib/importParsers.ts` (import) |
+
+**Why P3.** A stored value could add fields or whole records to an exported file. Whoever imports that file, PaperLume included, then receives them. That includes a `UR` line that gives a paper a PMID, a `DO` line, authors and links. A third party could write such a value into a library through a shared file or a metadata record it controls. But that adds nothing to what a RIS file written by that third party can already do when it is imported. No code runs, and imported text reaches no HTML interpreter. So the rating stays at P3, and no additional security consequence was found.
+
+### What was wrong in RIS
+
+Reproduced on `main` `a9c40ea6` with the real `exportToRIS` and `parseRIS`, reading the exported bytes. All values were synthetic.
+
+**Export.** `exportToRIS` wrote each value straight after its tag. A line break in a value therefore started a new line, and the text after it was read as a line of its own:
+
+| Stored value (one paper unless stated) | Read back by `parseRIS` on `main` |
+|---|---|
+| A structured abstract over five lines, one of them empty | 1 paper; the abstract cut to its first line |
+| An abstract with lines `KW  - …`, `AU  - Fabricated, Author`, `DO  - 10.9999/fabricated`, `UR  - https://pubmed.ncbi.nlm.nih.gov/99999999/`, `PY  - 1901` | 1 paper with an added author, keyword and DOI, and the PMID 99999999 taken from the `UR` line; the abstract cut |
+| A DOI-only paper whose abstract has a PubMed `UR` line | the paper gains the PMID 31415926 |
+| A title with a second line `PY  - 1999`, stored year 2020 | year 1999, the title cut |
+| `ER  - `, an empty line, `TY  - JOUR` and a `T1` line, in an abstract | 2 papers: the abstract cut, and an injected record holding the paper's keywords, study type, tag and project |
+| The same text in each of 13 fields: title, author, a year that is not a number, journal, DOI, attachment link, abstract, keyword, MeSH term, substance, study type, tag and project, with a sentinel paper after it | 3 papers for 2 in each case; the sentinel itself intact |
+| `TY  - JOUR` and a `T1` line in an abstract, between two sentinels | 3 papers, but the affected one replaced by the injected record: its title, author, DOI and abstract lost |
+| `ER  - ` then `TY  - JOUR` in an abstract | the injected record has no title, so it is skipped with "RIS entry 2: missing title, skipped", and the paper's keywords are lost with it |
+| A title holding a lone CR, U+2028 or U+2029 | the paper is lost: its `T1` line did not match the tag pattern, so the record was skipped as untitled |
+| An abstract holding a lone CR, U+2028 or U+2029 | the abstract is lost |
+| A line break as LF or CR LF in a title | the title cut at it |
+
+`UR`, `L2` and `AN` could not carry a line break: they are built from parsed URLs and validated PMID digits, which hold none. Every other field could. A value holding U+0085 NEXT LINE was read back correctly. The four structural readers described under [RIS format evidence](#ris-format-evidence) also found 2 records for the abstract with an injected record and 3 for each of the 13-field cases, so the corruption is in the file, not only in PaperLume's reading of it.
+
+**Import.** `parseRISEntries` ignored every line that did not match its tag pattern, so a value continued on further lines was cut to its first line: the historical specification's own sample, a Zotero-style export of a multi-line abstract, and an EndNote-style indented abstract all lost their continuation lines. A wrapped author or keyword lost its second line. A record missing its `ER` before the next `TY` was dropped without a warning. These behaviours were confirmed as documented tolerances and are kept: a final record without `ER` is read; an `ER` outside a record and text outside records are ignored; an empty record and a record without a title are skipped with "missing title, skipped"; a file whose tag lines have one space before the hyphen, or whose only line ending is CR, gives "No valid RIS entries found in file."
+
+### RIS format evidence
+
+Read from the sources below; no reference manager is installed here, and none was installed or run.
+
+- **The historical specification.** "RIS Format Documentation", Thomson Reuters ResearchSoft, its pages last updated May 2009, in `direct export.zip` (file dated 2011-09-20), as the Internet Archive holds it from `refman.com/support/risformat_intro.asp`, the page Zotero's format list links to.
+  - A tag is a capital letter, a capital or digit, two spaces, a hyphen and a space.
+  - Each tag and its contents go on a separate line, preceded by CR LF.
+  - `TY` is the first tag of a reference and `ER` the last.
+  - Fields may hold the characters from space (32) to 255, so no control character.
+  - A field longer than 70 characters may continue on the next line after a CR LF; the sample abstract continues on unindented lines.
+  - Authors and keywords repeat, one per tag; per the specification, other fields occur once.
+  - `UR` may hold several URLs on one line, separated by semicolons.
+- **Zotero.** Its "Data formats" page says the specification was last updated in 2001 and that Zotero exports "fairly strict RIS". Its RIS translator (`RIS.js` in `zotero/translators`, last updated 2026-01-05):
+  - accepts one or two spaces before the hyphen;
+  - adds a line that is not a tag line to the field above it, trimmed: with a line break for `AB`, `N1`, `N2` and `RN` by a line-length heuristic, with a line break for `KW`, `L1`, `L2` and `L3`, which it later splits into separate keywords and links, and with a space otherwise;
+  - ends an unfinished record at a `TY` and keeps it; ignores an `ER` outside a record; replaces U+2028 and U+2029 with a space;
+  - writes CR LF line endings, but writes a multi-line value's line breaks as they are, so its own files rely on unindented continuation lines.
+  - Its string reader (`zotero/translate`) splits lines at LF, dropping a CR before it, and at a lone CR only when no LF follows.
+- **EndNote 2025.** Its "Continuation Lines" page, under `docs.endnote.com/docs/endnote/2025/v1/windows/en/content/19filters/` (the same address without `/v1/` returns 404), says EndNote ignores lines that do not begin with a tag unless they continue a tagged field. Its default, Smart Indent Identification, imports continuation lines indented to align with the first line's data. "Ignore Indents" instead makes every untagged line a continuation. Its "Record Layout" page says the default record detection starts a new record where a tag repeats out of sequence after a blank or extraneous line, and that "Blank line separates records" is an option.
+- **Citavi** (manual 7, "Importing a RIS file"): a two-letter field code, two spaces, a hyphen and one space. It says nothing about continuation lines.
+- **JabRef** (`RisImporter.java`, `main` `794547e5`):
+  - reads lines with Java's `BufferedReader`, so LF, CR or CR LF ends a line;
+  - splits records at `ER  -` wherever it appears in the text, even inside a value on one line;
+  - adds a line of at least six characters whose third to sixth characters are not "  - " to the line above it.
+- **rispy** (`rispy/parser.py`, `main` `b7aae3b2`):
+  - a tag line has "  -" as its third to fifth characters;
+  - any other line continues the last tag: joined with a space to a single field, but a new element of a list field (`A1`–`A4`, `AU`, `KW`, `N1`, `UR`);
+  - `UR` is split at semicolons;
+  - a `TY` before `ER` merges the two records, and a final record without `ER` is dropped.
+
+To compare structure, four small readers were written in a scratch directory: one from the specification and ports of the Zotero, rispy and JabRef line and record logic. No third-party code was run. Their results describe those ports, not the tools.
+
+### Fields
+
+| Tag | Exported from | Kind | Repeated | Line break legitimate | Existing validation | Written as |
+|---|---|---|---|---|---|---|
+| `TY` | fixed `JOUR` | marker | no | — | — | fixed text |
+| `T1` | `title` | prose | no | no | none | one value, continuation lines |
+| `AU` | each of `authors` | list element | yes | no | none; an opaque mention on import | one line, line breaks as spaces |
+| `PY` | `year` | number | no | no | a number is written as JavaScript prints it; nothing checks a value that is not one | one value, continuation lines |
+| `JO` | `journal` | prose | no | no | none | one value, continuation lines |
+| `AN` | `pmid` | identifier | no | no | only a valid PMID, digits | as before; holds no line break |
+| `DO` | `doi` | identifier | no | no: no DOI name holds one | none: the DOI name as stored | one value, continuation lines |
+| `UR` | PMID, PubMed link, DOI or journal link, in that order | link | no | no | a parsed http(s) URL or a canonical one | as before; holds no line break |
+| `L2` | `journal_url` | link | no | no | a parsed http(s) URL | as before; holds no line break |
+| `L1` | `drive_url` | attachment link | no | no | none: free text, as stored | one value, continuation lines |
+| `AB` | `abstract` | prose | no | **yes** | none | one value, continuation lines |
+| `KW` | each of `keywords`, `mesh_terms`, `substances` | list element | yes | no | none | one line, line breaks as spaces |
+| `N1` | `study_type` | label | no | no | none | one value, continuation lines |
+| `C1` | each tag's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces |
+| `C2` | each project's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces |
+| `ER` | fixed | marker | — | — | — | fixed text |
+
+Values reach these fields from imports (BibTeX, RIS, NBIB, EndNote and CSV files), from PubMed and Crossref metadata, from the add and edit dialogs and from a user's own direct writes. No database constraint keeps a line break out of any of them. A BibTeX or CSV import can store one, and HTML-entity decoding turns `&#10;` into one.
+
+### The fix
+
+Four ways of writing a multi-line value were compared:
+
+- **A, flatten every line break.** Safe for every record, but it loses the paragraphs of an abstract, which the app shows with their line breaks, and it would turn a DOI or link that holds a line break into a different value.
+- **B, continuation lines everywhere.** It keeps every value. But a continued author or keyword becomes several values in rispy and, for keywords, in Zotero.
+- **C, by field.** Continuation lines for fields that hold one value, and one line for each list element. **This was chosen.** It keeps prose and identifiers whole for PaperLume, and no reader examined splits a list element.
+- **D, an app-specific encoding.** It is needed only where a legitimate value cannot be written safely, and no legitimate value here is such a case. So no PaperLume-specific tag, escape or notice is added.
+
+**The contract written by `exportToRIS`:**
+
+- **Every paper is one record:** `TY  - JOUR`, its fields in the same order as before, `ER  - `. Records are separated by one empty line, and lines end in LF. There is no CR and no byte order mark anywhere, and the file name and media type are unchanged.
+- **A line break inside a value is CR LF, CR or LF.** RIS ends lines at CR LF or LF, and some readers also end them at a lone CR.
+- **A field that holds one value** (`T1`, `PY`, `JO`, `AN`, `DO`, `UR`, `L2`, `L1`, `AB`, `N1`) writes the first line of its value after the tag. Each further line goes on a continuation line: six spaces, the width of the tag column, then the line's text, which may be empty or begin with spaces. A line that starts with six spaces cannot start a field for any reader examined, so continuation text such as `ER  - ` stays in its field.
+- **A list element** (`AU`, `KW`, `C1`, `C2`) stays on its one tagged line, with each line break in it written as one space. The stored value is unchanged.
+- **Other characters are unchanged**, U+2028, U+2029 and U+0085 included: they are not RIS line endings.
+- **A value with no line break** is written exactly as before.
+
+**The contract read by `parseRISEntries`:**
+
+- **Lines** end at LF, with a CR just before it dropped, as before.
+- **A tag line** is matched by its shape, as before, so an unfamiliar tag still begins a field of its own. Its value may now hold U+2028 or U+2029: such a line used to fail to match and was dropped.
+- **Inside a record, any other line continues the field above it** on a new line of that field's value. Up to six leading spaces are the line's indentation and the rest is text, even text that looks like a tag. An empty line is an empty line of the value. Each value is trimmed as a whole, so a one-line value is read exactly as before.
+- **Not continuations:** a line shaped like a tag but malformed, such as `AU - Name` with one space or a tag in lower case, and a line that holds a lone CR. Both are ignored, as before.
+- **Lines outside a record** are ignored and are never added to the record before them.
+- **A `TY` inside an unfinished record** still starts a new record in its place, and a final record without `ER` is still read. Whether such an unfinished record should be kept is a recovery decision this change does not make: Zotero keeps it, while rispy and JabRef merge it into the next record.
+
+**What comes back.** PaperLume's own export reads back with every value as stored, with three normalizations:
+- CR LF and CR inside a value become LF;
+- a line break inside a list element becomes a space;
+- white space around a whole value is trimmed, as before.
+
+The value's own leading spaces, trailing spaces, tabs and empty lines inside it are kept. After one export and import, further cycles give identical files.
+
+**Identifiers.** `DO` holds the DOI name as stored, never a resolver URL. `UR` keeps its order of precedence, and the resolver URL is encoded once: `10.1000/456#789` gives `DO  - 10.1000/456#789` and `UR  - https://doi.org/10.1000/456%23789`, as before. `L2` stays beside a higher-ranked `UR`. `AN` is written only for a valid PMID and is still not trusted on import; a PMID still comes only from a PubMed record URL in a `UR` tag line, so text in an abstract that reads like `AN` or `UR` sets nothing. Authors keep their order and one mention each, recorded as `AU` with kind `unknown`, as before.
+
+### Evidence
+
+- **Tests.** `src/lib/__tests__/exportRIS.integrity.test.ts` is new, with 93 tests. They read every export twice: once with a structural reader written for the suite, which rejects any line that is neither a field nor a continuation, a `TY` or `ER` inside a record and an empty line inside a record, and once with `parseRIS`. Expected values are written out by hand. They cover:
+  - an ordinary record and several records, byte for byte as on `main`, with the file name and media type;
+  - each single-value field and each list field holding record syntax, with a sentinel paper after it; all fields at once;
+  - a year that is not a number, DOI and link boundaries, PMID authority, and `UR` and `L2` precedence;
+  - LF, CR LF, CR and mixed line breaks; U+2028, U+2029 and U+0085;
+  - tag-like text, empty lines and white space inside prose, and scientific text;
+  - unknown tags; third-party files in the specification's, Zotero's and EndNote's shapes; files exported by `main`;
+  - malformed input;
+  - repeated cycles, an empty export, an abstract of 2,002 lines, and 3,000 papers with multi-line values in every field;
+  - CSV and BibTeX bytes for a paper with line breaks in every field.
+
+  63 of the 93 fail on `main`. The other 30 pin what `main` already does: ordinary bytes, empty exports, malformed-input tolerances, and fields that cannot hold a line break.
+- **Negative controls.** 30 weakened copies of the two modules were run through a scratch alias, without changing the repository, against the new suite and the seven existing export and import suites (645 tests). An unmodified copy passes all of them. Every copy fails tests of the new suite, except where noted:
+
+  | Control | Weakened copy | New tests failing, of 93 | Existing tests failing, of 645 |
+  |---|---|---|---|
+  | — | `main`'s two modules / `main`'s exporter only / `main`'s parser only | 63 / 50 / 39 | 0 / 0 / 0 |
+  | A | Values written raw after their tags, as on `main` | 50 | 0 |
+  | B | Only `AB` protected | 31 | 0 |
+  | C | A lone CR not taken as a line break on export | 16 | 0 |
+  | D | A lone LF not taken as a line break on export | 46 | 0 |
+  | E | Continuation lines ignored on import, as on `main` | 37 | 0 |
+  | F | Lines after `ER` added to the record before them | 1 | 0 |
+  | G | Tag-like text on a continuation line read as a tag | 23 | 0 |
+  | H1 | Continuation lines left out of the export | 35 | 0 |
+  | H2 | A value's lines joined with spaces (option A) | 34 | 0 |
+  | I | The DOI written as its resolver URL | 47 | 10 |
+  | J | `AN` trusted as a PMID | 1 | 4 |
+  | K1 | `L2` left out beside a `UR` | 4 | 1 |
+  | K2 | `UR` preferring the journal link to the DOI | 1 | 0 |
+  | L1 | All authors in one `AU` line | 7 | 0 |
+  | L2 | An author split into two `AU` lines at its line break | 8 | 0 |
+  | L3 | List elements on continuation lines (option B everywhere) | 16 | 0 |
+  | M1 | A paper with an empty title left out | 1 | 0 |
+  | M2 | An indented `ER` or `TY` ending the record on import | 15 | 0 |
+  | N1 | CSV no longer quoting `;` | 1 | 3 |
+  | N2 | The BibTeX title without its inner braces | 1 | 3 |
+  | O1 | A continuation indent of five spaces | 33 | 0 |
+  | O2 | Unindented continuation lines | 34 | 0 |
+  | O3 | An empty line of a value written as an empty line | 13 | 0 |
+  | P1 | All leading white space taken as indentation on import | 10 | 0 |
+  | P2 | A malformed tag line taken as a continuation | 1 | 0 |
+  | P3 | The old tag pattern, which drops a line holding U+2028 | 2 | 0 |
+  | P4 | Each line trimmed on import | 16 | 0 |
+  | P5 | A line holding a lone CR taken as a continuation | 1 | 0 |
+  | P6 | Continuation lines joined with a space on import | 36 | 0 |
+  | P7 | Only indented lines taken as continuations | 3 | 0 |
+
+  The existing suites catch only I, J, K1, N1 and N2, and none of the controls that break records or line structure.
+
+- **A 3,000-record differential.** Synthetic papers mixing line breaks in every field, record syntax, U+2028 and U+0085, hostile identifiers and links, years that are not numbers and ordinary values were exported by `main` and by the fix, with the clock frozen.
+  - **CSV.** 422,578 B, byte-identical.
+  - **BibTeX.** 909,570 B, byte-identical, with the same export summary: 3,000 papers, 555 affected, 555 DOI fields and no URL field in a PaperLume field.
+  - **Empty exports.** Byte-identical in all three formats.
+  - **RIS.** 702,148 B on `main` and 737,646 B with the fix. Of the 3,000 single-record exports, the 2,778 that changed are exactly the records with a CR or LF in an exported value; the other 222 are byte-identical.
+  - **Re-import of the fix's file.** 2,949 papers and 51 "missing title, skipped" warnings, for the 51 papers with an empty title, as before. Every title, author list, journal, DOI, abstract, attachment link, keyword list and study type equals the stored value under the contract above. `main`'s file read as 2,528 papers with 1,491 warnings.
+  - **The four structural readers.** On the fix's file, the specification reader and the Zotero and rispy ports find 3,000 records. The JabRef port finds 4,774, because `ER  -` occurs 2,013 times inside values, and JabRef splits at it even inside a line. On `main`'s file they found 4,019, 4,076, 4,019 and 4,867.
+- **Performance.** Medians of 7 runs in jsdom on the development machine, load average about 7. The timings are informational, and the suite asserts no time limit. Work grows linearly in every workload, on `main` and with the fix:
+
+  | Workload | Size ×1 | Export ms, `main` / fix (×1, ×2, ×4) | Parse ms, `main` / fix (×1, ×2, ×4) |
+  |---|---|---|---|
+  | One abstract of 10,000 lines, a seventh of them `ER  - ` | 0.75 MB | 15.7 / 13.5, 28.9 / 29.0, 60.2 / 76.6 | 1.0 / 1.6, 1.2 / 2.6, 2.2 / 4.9 |
+  | 1,000 papers with line breaks in six fields | 0.34 MB | 6.7 / 7.9, 15.5 / 17.7, 28.5 / 38.5 | 2.5 / 6.1, 4.2 / 12.2, 10.0 / 23.5 |
+  | 3,000 ordinary papers (identical bytes) | 0.76 MB | 17.5 / 19.1, 36.0 / 45.0, 88.3 / 97.3 | 14.1 / 17.2, 29.2 / 34.8, 57.9 / 75.2 |
+  | An abstract of 20,000 `ER  - ` lines | 0.26 MB | 2.3 / 5.7, 4.8 / 10.7, 9.7 / 25.7 | 1.5 / 2.2, 2.9 / 4.4, 5.7 / 8.4 |
+  | 100,000 malformed or outside lines (parse only) | 1.3 MB | — | 3.8 / 5.5, 10.0 / 11.3, 27.6 / 23.4 |
+
+  `main` parses some workloads faster because it drops the lines the fix reads. Each value's lines are collected and joined once, and the parser makes one pass with no backtracking-prone pattern.
+- **Suites.** The full Vitest suite has 276 files and 9,448 tests, against 275 and 9,355 on `main`. Lint reports 0 errors and the same 18 warnings, and the three typechecks pass.
+- **Build.** No dependency changed: `package.json` and `package-lock.json` are byte-identical to `main`'s, and nothing under `supabase/` or `.github/` changed. `main` `a9c40ea6` and the code commit `5775decf` were each built in a clean worktree, with the same installed packages and no `.env`:
+  - Of the web build's 9 files, 7 are byte-identical, the CSS included, and `index.html` differs only in the entry chunk's name.
+  - **Entry chunk size.** It grows by 390 B, from 1,985,988 B to 1,986,378 B, and by 208 B with `gzip -9`.
+  - **Why a byte comparison does not localize the change.** The new top-level functions shift the short names the minifier gives other top-level functions, so the two chunks agree for only 9 characters at each end.
+  - **Token comparison.** Local names were masked, and keywords, punctuation, property names, numbers, regular expressions, strings and template text kept. The chunks then differ in 86 hunks in two places. One is about 370 tokens, where the RIS exporter follows the CSV exporter, and the other about 155 tokens, in `parseRISEntries`; the other 734,000 tokens are identical. The string and template literals differ only in the RIS tags, the six-space indentation and the line-break strings.
+  - **Un-minified builds.** Built without minification, the entry chunk differs in 13 hunks and 67 lines. All of them are in `exportToRIS`, its two new functions and constants, and `parseRISEntries`. So the URL origins, the inlined environment keys, and the database, RPC, Edge Function, auth and storage calls are unchanged.
+  - The extension output's 8 files and its packaged archive (`0feb935d…`) are byte-identical.
+
+### Not verified
+
+- **External tools.** No reference manager or RIS library is installed here, and none was installed. What Zotero, EndNote, JabRef, rispy and Citavi do comes from their documentation and source, and the structural readers above are ports, not the tools. In particular:
+  - it was not observed that EndNote's RIS import uses Smart Indent Identification;
+  - nor how EndNote treats a continuation line of six spaces alone, which some programs take as a blank line.
+- **Browser.** No browser run was made: the change is in two pure functions, and the download and the import dialog are unchanged. No CI lane exports or imports a RIS file. The E2E specs only check that the RIS menu item is shown, so the Vitest suites above are the qualification.
+- **Production.** No Production export or import was run, and no Production data was read, so how many stored values hold a line break is unknown.
+
+### Limitations not changed here
+
+- **JabRef** splits a record at `ER  -` anywhere, even inside a one-line value such as a title "WATER  - a study", on `main` as with the fix. PaperLume does not alter text to avoid it.
+- **Other readers join a continuation line in their own way.**
+  - Zotero keeps line breaks in an abstract or note by its heuristic and joins other fields with a space.
+  - rispy joins a single field with a space and makes a continued `N1` a second note.
+  - JabRef keeps the six spaces between the joined lines.
+  - Zotero would split a continued `L1` into two links. A stored attachment link with a line break is not a usable link in any case.
+- **A DOI that holds a line break** is not a DOI name. PaperLume reads it back as stored, but another reader that joins its lines sees a different value. Whether such a value should instead be left out of `DO`, or moved to a PaperLume-specific field with a notice as BibTeX does, is a product decision not taken here.
+- **U+2028, U+2029 and U+0085** are written unchanged. A program that ends lines at them, such as Python's `str.splitlines`, sees a line break there. Zotero replaces U+2028 and U+2029 with a space.
+- **A third-party file is read with its own line breaks.** An abstract that another program wrapped at 70 or 80 characters keeps those line breaks, and the abstract view shows them. An unindented line in such a file that is a real tag line, such as `ER  - was not reached`, still ends its field or record; no reader can tell it from a tag.
+- **Files exported before this change** with a multi-line value but no tag-like line are now read whole. A file whose value already ended its record cannot be repaired and reads as it did.
+- **Unchanged parser behaviour.** A `TY` before `ER` still drops the unfinished record; tag lines with one space before the hyphen are still ignored; a file whose only line ending is CR is still not read.
+
+### What remains
+
+Each item is separate work, and none of it is part of this change:
+
+- **CodeQL groups Q2–Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
+- **The search cache after an import** (`PAPERLUME-POST-IMPORT-SEARCH-CACHE-001`); see [Browser qualification](#browser-qualification).
+- **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
+- **E2E spec coverage** (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`). No lane exports or imports RIS, BibTeX or CSV files.
+- **External reference-manager qualification** of RIS and BibTeX exports.
+- **Recovery of a record without `ER`** before the next `TY`, and the DOI decision above.
 - **Superseded Dependabot pull requests.** PRs 351–354 are still open.
 
 ## NanoID finding — REMEDIATED
