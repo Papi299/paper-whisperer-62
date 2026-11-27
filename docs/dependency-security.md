@@ -1240,7 +1240,7 @@ Each item is separate work, and none of it is part of this change:
 
 ## RIS record integrity
 
-**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-RIS-RECORD-BOUNDARY-INTEGRITY-001` is based on `main` `a9c40ea6` and rated P3, for bibliographic data integrity. It repairs the RIS residual finding of the [CSV formula injection](#csv-formula-injection-cwe-1236) audit, which was found by reading the code, not by CodeQL. No CodeQL rule reports it, and no dependency changes. Until the fix merges and deploys, `main` and Production still export and import RIS as described under [What was wrong in RIS](#what-was-wrong-in-ris).
+**Status: fix proposed in a Draft pull request, not merged.** `PAPERLUME-RIS-RECORD-BOUNDARY-INTEGRITY-001` is based on `main` `a9c40ea6` and rated P3, for bibliographic data integrity. It repairs the RIS residual finding of the [CSV formula injection](#csv-formula-injection-cwe-1236) audit, which was found by reading the code, not by CodeQL. No CodeQL rule reports it, and no dependency changes. An independent review of the first version found that reading continuation lines let a continued link become a different link or PMID. Revision `PAPERLUME-RIS-RECORD-BOUNDARY-INTEGRITY-001A`, in the same pull request, therefore reads links, the year and the attachment link from their tag lines again; see [Identifier authority (revision 001A)](#identifier-authority-revision-001a). Until the fix merges and deploys, `main` and Production still export and import RIS as described under [What was wrong in RIS](#what-was-wrong-in-ris).
 
 | Field | Value |
 |---|---|
@@ -1308,24 +1308,26 @@ To compare structure, four small readers were written in a scratch directory: on
 
 ### Fields
 
-| Tag | Exported from | Kind | Repeated | Line break legitimate | Existing validation | Written as |
-|---|---|---|---|---|---|---|
-| `TY` | fixed `JOUR` | marker | no | — | — | fixed text |
-| `T1` | `title` | prose | no | no | none | one value, continuation lines |
-| `AU` | each of `authors` | list element | yes | no | none; an opaque mention on import | one line, line breaks as spaces |
-| `PY` | `year` | number | no | no | a number is written as JavaScript prints it; nothing checks a value that is not one | one value, continuation lines |
-| `JO` | `journal` | prose | no | no | none | one value, continuation lines |
-| `AN` | `pmid` | identifier | no | no | only a valid PMID, digits | as before; holds no line break |
-| `DO` | `doi` | identifier | no | no: no DOI name holds one | none: the DOI name as stored | one value, continuation lines |
-| `UR` | PMID, PubMed link, DOI or journal link, in that order | link | no | no | a parsed http(s) URL or a canonical one | as before; holds no line break |
-| `L2` | `journal_url` | link | no | no | a parsed http(s) URL | as before; holds no line break |
-| `L1` | `drive_url` | attachment link | no | no | none: free text, as stored | one value, continuation lines |
-| `AB` | `abstract` | prose | no | **yes** | none | one value, continuation lines |
-| `KW` | each of `keywords`, `mesh_terms`, `substances` | list element | yes | no | none | one line, line breaks as spaces |
-| `N1` | `study_type` | label | no | no | none | one value, continuation lines |
-| `C1` | each tag's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces |
-| `C2` | each project's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces |
-| `ER` | fixed | marker | — | — | — | fixed text |
+| Tag | Exported from | Kind | Repeated | Line break legitimate | Existing validation | Written as | Read on import (revision 001A) |
+|---|---|---|---|---|---|---|---|
+| `TY` | fixed `JOUR` | marker | no | — | — | fixed text | starts a record |
+| `T1` | `title` | prose | no | no | none | one value, continuation lines | whole value |
+| `AU` | each of `authors` | list element | yes | no | none; an opaque mention on import | one line, line breaks as spaces | whole value, one element |
+| `PY` | `year` | number | no | no | a number is written as JavaScript prints it; nothing checks a value that is not one | one value, continuation lines | tag line alone |
+| `JO` | `journal` | prose | no | no | none | one value, continuation lines | whole value |
+| `AN` | `pmid` | identifier | no | no | only a valid PMID, digits | as before; holds no line break | not read |
+| `DO` | `doi` | identifier | no | no: no DOI name holds one | none: the DOI name as stored | one value, continuation lines | whole value if its tag line holds a DOI name, else the tag line alone |
+| `UR` | PMID, PubMed link, DOI or journal link, in that order | link | no | no | a parsed http(s) URL or a canonical one | as before; holds no line break | tag line alone |
+| `L2` | `journal_url` | link | no | no | a parsed http(s) URL | as before; holds no line break | tag line alone |
+| `L1` | `drive_url` | attachment link | no | no | none: free text, as stored | one value, continuation lines | tag line alone |
+| `AB` | `abstract` | prose | no | **yes** | none | one value, continuation lines | whole value |
+| `KW` | each of `keywords`, `mesh_terms`, `substances` | list element | yes | no | none | one line, line breaks as spaces | whole value, one element |
+| `N1` | `study_type` | label | no | no | none | one value, continuation lines | whole value |
+| `C1` | each tag's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces | not read |
+| `C2` | each project's name | custom list element | yes | no | none; not read on import | one line, line breaks as spaces | not read |
+| `ER` | fixed | marker | — | — | — | fixed text | ends the record |
+
+The alternate tags the importer also reads follow their primary tag: `TI` and `T2` as `T1`, `A1` as `AU`, `JF` and `JA` as `JO`, `N2` as `AB`, and `Y1` and `DA` as `PY`.
 
 Values reach these fields from imports (BibTeX, RIS, NBIB, EndNote and CSV files), from PubMed and Crossref metadata, from the add and edit dialogs and from a user's own direct writes. No database constraint keeps a line break out of any of them. A BibTeX or CSV import can store one, and HTML-entity decoding turns `&#10;` into one.
 
@@ -1351,19 +1353,138 @@ Four ways of writing a multi-line value were compared:
 
 - **Lines** end at LF, with a CR just before it dropped, as before.
 - **A tag line** is matched by its shape, as before, so an unfamiliar tag still begins a field of its own. Its value may now hold U+2028 or U+2029: such a line used to fail to match and was dropped.
-- **Inside a record, any other line continues the field above it** on a new line of that field's value. Up to six leading spaces are the line's indentation and the rest is text, even text that looks like a tag. An empty line is an empty line of the value. Each value is trimmed as a whole, so a one-line value is read exactly as before.
+- **Inside a record, any other line continues the field above it** on a new line of that field's value. Up to six leading spaces are the line's indentation and the rest is text, even text that looks like a tag. An empty line is an empty line of the value. Each value is trimmed as a whole, so a one-line value is read exactly as before. Each field also keeps the value of its tag line alone, trimmed, as it was read.
+- **Which fields take their continuation lines** (revision 001A). The text fields read the whole value. `UR`, `L2`, `L1`, `PY`, `Y1` and `DA` read their tag line alone, as before continuation lines were read. `DO` reads the whole value only when its tag line holds a DOI name, and otherwise its tag line alone. The table under [Fields](#fields) lists every tag; [Identifier authority (revision 001A)](#identifier-authority-revision-001a) says why.
 - **Not continuations:** a line shaped like a tag but malformed, such as `AU - Name` with one space or a tag in lower case, and a line that holds a lone CR. Both are ignored, as before.
 - **Lines outside a record** are ignored and are never added to the record before them.
 - **A `TY` inside an unfinished record** still starts a new record in its place, and a final record without `ER` is still read. Whether such an unfinished record should be kept is a recovery decision this change does not make: Zotero keeps it, while rispy and JabRef merge it into the next record.
 
-**What comes back.** PaperLume's own export reads back with every value as stored, with three normalizations:
+**What comes back.** PaperLume's own export reads back every text value as stored, except for three normalizations, so it is not character for character where they apply:
 - CR LF and CR inside a value become LF;
 - a line break inside a list element becomes a space;
 - white space around a whole value is trimmed, as before.
 
-The value's own leading spaces, trailing spaces, tabs and empty lines inside it are kept. After one export and import, further cycles give identical files.
+The value's own leading spaces, trailing spaces, tabs and empty lines inside it are kept. A stored DOI that holds a line break comes back with it, under the same normalizations, when its first line is a DOI name, and as its first line otherwise. A stored attachment link or year that holds a line break comes back as its first line, as on `main`. `UR` and `L2` are written from parsed URLs, which hold no line break. After one export and import, further cycles give identical files.
 
-**Identifiers.** `DO` holds the DOI name as stored, never a resolver URL. `UR` keeps its order of precedence, and the resolver URL is encoded once: `10.1000/456#789` gives `DO  - 10.1000/456#789` and `UR  - https://doi.org/10.1000/456%23789`, as before. `L2` stays beside a higher-ranked `UR`. `AN` is written only for a valid PMID and is still not trusted on import; a PMID still comes only from a PubMed record URL in a `UR` tag line, so text in an abstract that reads like `AN` or `UR` sets nothing. Authors keep their order and one mention each, recorded as `AU` with kind `unknown`, as before.
+**Identifiers.** `DO` holds the DOI name as stored, never a resolver URL. `UR` keeps its order of precedence, and the resolver URL is encoded once: `10.1000/456#789` gives `DO  - 10.1000/456#789` and `UR  - https://doi.org/10.1000/456%23789`, as before. `L2` stays beside a higher-ranked `UR`. `AN` is written only for a valid PMID and is still not trusted on import; a PMID still comes only from a PubMed record URL in a `UR` tag line, so text in an abstract that reads like `AN` or `UR` sets nothing. Each `UR` and `L2` is read from its tag line alone, so a continuation line can neither add to a link nor supply one. Authors keep their order and one mention each, recorded as `AU` with kind `unknown`, as before.
+
+### Identifier authority (revision 001A)
+
+**What the review found.** The first version of this fix read continuation lines into every field. `risEntryToRawPaper` then handed a continued `UR`, with its lines joined by LF, to `extractPmidFromPubMedUrl`, `isPubMedRecordUrl` and `toImportableExternalUrl` in `src/lib/pubmedIdentifiers.ts`. Those use the WHATWG URL parser, which removes every ASCII tab, LF and CR from its input. `new URL("https://pubmed.ncbi.nlm.nih.gov/123\n456/").href` is `https://pubmed.ncbi.nlm.nih.gov/123456/`. So `UR  - https://pubmed.ncbi.nlm.nih.gov/123` continued by `456/` was read as the record 123456, which neither line names. `main` ignores continuation lines and reads the record 123. The independent review found this; it was not found by CodeQL.
+
+**Reproduced.** 82 synthetic third-party fixtures, each between two sentinel records, were read by the real `parseRIS` of `main` `a9c40ea6`, of the first Draft head `9c76e2bd` and of the revision. No request was made to PubMed or any resolver. The review's own fixture gave PMID 123 on `main`, 123456 on the first Draft and 123 with the revision. The first Draft changed a PMID, PubMed link, journal link, attachment link, saved DOI or year relative to `main` in 51 of the 82. Every sentinel came through whole with all three. Examples:
+
+| Fixture: tag line, then continuation line | `main` | First Draft | Revision |
+|---|---|---|---|
+| `UR  - https://pubmed.ncbi.nlm.nih.gov/123`, then `456/`: six-space, four-space, tab-led or unindented, LF or CR LF | PMID 123 | PMID 123456 | PMID 123 |
+| The same, continued after eight spaces or by `ZZ  - 456/` | PMID 123 | no PMID; a journal link `…/123%20%20456/` or `…/123ZZ%20%20-%20456/` | PMID 123 |
+| `UR  - https://pubmed.ncbi.nlm.nih.gov/`, then `999/` | journal link `https://pubmed.ncbi.nlm.nih.gov/` | PMID 999 | as `main` |
+| `UR  - https:`, then `//pubmed.ncbi.nlm.nih.gov/999/` | nothing | PMID 999 | nothing |
+| An empty `UR`, continued by a PubMed URL, then `UR  - …/123/` | PMID 123 | PMID 999 | PMID 123 |
+| `UR  - https://journal.example`, then `.elsewhere.example/x` | journal link `https://journal.example/` | `https://journal.example.elsewhere.example/x` | as `main` |
+| `L2  - https://journal.example/a`, then `b` | `…/a` | `…/ab` | `…/a` |
+| An empty `L2`, continued by a URL | no journal link | that URL | no journal link |
+| `L1  - https://drive.example`, then `.elsewhere.example/x` | the link opens `https://drive.example/` | it opens `https://drive.example.elsewhere.example/x` | as `main` |
+| An empty `PY` continued by `2020`, then `Y1  - 1999` | year 1999 | 2020 | 1999 |
+| An empty `DO`, or `DO  - doi:` or `DO  - https://doi.org/` alone, continued by `10.1000/xyz` | no DOI, or the prefix alone | saved as `10.1000/xyz` | as `main` |
+| `DO  - 10.1000/abc`, then `def` | `10.1000/abc` | `10.1000/abc` LF `def` | as the first Draft |
+
+Two fixtures differ from `main` with the revision for a reason that is not continuation. A `UR` tag line that ends in U+2028 now gives its PMID, and one that holds U+2028 inside its path gives a journal link with `%E2%80%A8` in it. `main` dropped both lines, because its tag pattern did not match U+2028. That is the first version's tag-line change, not a continuation; the URL parser percent-encodes U+2028, so it joins nothing.
+
+**The policy.** As approved for this revision, an identifier is interpreted from the tag line it was written on, as before:
+- **`UR` and `L2`** are read from their tag lines alone, with the existing helpers, validation and normalization unchanged. So no URL is assembled from two lines, an incomplete tag line is not completed, the first PubMed record on a tag line still supplies the PMID, and `L2` still wins over a generic `UR`.
+- **`L1`** is read the same way. It is stored unvalidated, as before, but the application renders it through `toSafeExternalHref` in `QuickAddDriveLink`, which uses the same URL parser. So a continued `L1` opened a joined link, a different host included. No attachment validation is added.
+- **`PY`, `Y1` and `DA`** are read from their tag lines, so a continuation line cannot supply a year or change which tag it comes from. On the first Draft, the "9999" of a DOI on a continuation line of a stored year that is not a number became the year.
+- **`DO`** keeps the first version's handling of a multi-line DOI, but only after a tag line that holds a DOI name. `extractDoiFromMetadataValue` in `src/lib/doiIdentifiers.ts` decides that, unchanged; it accepts `10.1000/x`, `doi:10.1000/x` and `https://doi.org/10.1000/x`. Otherwise `DO` is its tag line alone, as on `main`. A one-line `DO` is not checked at all, since its value is its tag line.
+- **`AN`** is still not read, so it is not a PMID however it is continued.
+- **Text fields** keep the first version's handling unchanged: titles, authors, the journal, the abstract, keywords and notes.
+
+Each field keeps its tag-line value from the moment it is parsed (`RISField.tagLineValue`), not by splitting a trimmed value later. That way an empty tag line followed by text stays distinct from a tag line holding that text. The exporter, `src/lib/exportUtils.ts`, is not changed, and its output is byte-identical to the first Draft's. Any future support for a URL wrapped over physical lines would need an explicitly defined interoperability contract; no reader examined defines one.
+
+**DOI assessment.** The consumers of an imported DOI were traced from the source:
+- `normalizePaperData` removes one leading `https://doi.org/`, `http://dx.doi.org/` or `doi:`, trims the value and lowercases it. A line break inside the value is kept.
+- The `safe_bulk_insert_papers` RPC resolves a duplicate, per user, by `pmid` equality and by `lower(doi)` equality. Those are the semantics of the unique indexes `idx_papers_user_pmid_unique` and `idx_papers_user_doi_unique`, per `20260903180000_add_deterministic_import_duplicate_resolution.sql`. Neither removes white space.
+- `canonicalDoiUrl` encodes an inner LF as `%0A`, and `doiEquivalenceKey` folds ASCII case only.
+
+So a DOI that keeps an inner line break is a deduplication identity of its own. Because no DOI name holds a control character, it can equal no other paper's DOI name. On `main`, the same stored value came back as its first line, a different DOI that looks valid and can match another paper. That was not a regression. But on the first Draft, a continuation after an empty, `doi:`-only or `https://doi.org/`-only tag line became, once the prefix was removed and the value trimmed, a DOI that no tag line stated. That is a new deduplication identity from continuation text alone, and the DOI-name check above is the field-specific correction. With it, every DOI saved from a continued `DO` either equals `main`'s or keeps a line break. That held for all 82 fixtures and both corpora below.
+
+The DOI limits:
+- CR LF and CR become LF, and white space around the value is trimmed, so a multi-line DOI is not kept character for character where those apply.
+- A stored DOI whose first line is not a DOI name, such as `10.1000/` followed by `abc`, comes back as that first line, as on `main`. That line is not a DOI name either.
+- A DOI holding a line break is not claimed to be a registered identifier: its resolver link, with `%0A`, names no registered DOI.
+- Ordinary DOIs are unchanged: `DO  - 10.1000/456#789` and `UR  - https://doi.org/10.1000/456%23789`.
+
+**Tests.** `exportRIS.integrity.test.ts` grows from 93 to 150 tests: 56 in a new block K2, and one more cycle test in U. Expected values are written by hand. K2 reads each fixture between two sentinel records and covers:
+- concatenated PubMed paths, after six, four, eight or no spaces, a tab, tag-like text and the legacy path;
+- incomplete PubMed URLs, empty `UR` and `L2` tag lines, and generic `UR` paths, hosts and queries;
+- explicit `L2` and its precedence, several `UR` lines, and an invalid `UR` before a valid one;
+- PubMed and journal precedence, LF and CR LF, and tag-line URL normalization;
+- an abstract beside a continued `UR`, an ordinary DOI and PMID, and `AN`;
+- the DOI-name check, including the saved DOI through `normalizePaperData`;
+- `L1` with the link it opens through `toSafeExternalHref`, and the year.
+
+The first Draft fails 48 of the 150, and `main` fails 72. Three assertions of the first version's suite were revised on purpose, and its header states the new import contract:
+- **`K. DOI (DO)`** under "a field that holds one value…": the stored record-syntax value, whose first line "Opening line." holds no DOI name, now reads back as that line. The test is renamed "reads back as its tag line alone, with nothing injected".
+- **`L. attachment link (L1)`**, the same, and renamed the same way.
+- **"every field at once"**: the DOI and the attachment link are now "Opening line.", and the year is now `null`. On the first Draft it was 9999, from the DOI text on a continuation line.
+
+**Negative controls.** 15 new weakened copies of `importParsers.ts` were run through a scratch alias, without changing the repository. Each ran against the revised suite and the same seven export and import suites (645 tests). The unmodified revision passes all of them:
+
+| Control | Weakened copy | New suite failing, of 150 | Existing failing, of 645 |
+|---|---|---|---|
+| — | `main`'s two modules / `main`'s parser only / the first Draft | 72 / 46 / 48 | 0 / 0 / 0 |
+| A | A continued `UR` passed whole to the URL helpers again | 24 | 0 |
+| B | A continued `L2` passed whole again | 6 | 0 |
+| C | The tag line recovered by splitting the trimmed whole value | 10 | 0 |
+| D | An empty tag line taking its continuation (`UR`, `L2`, `L1`, years, `DO`) | 10 | 0 |
+| F | A valid PubMed record URL joined with its continuation | 13 | 0 |
+| G | `AN` trusted as a PMID | 2 | 4 |
+| H | Only the first `UR` read | 5 | 2 |
+| I | A generic `UR` preferred to `L2` | 1 | 1 |
+| J | An abstract read from its tag line alone | 30 | 0 |
+| L | The record after a continued field dropped | 76 | 0 |
+| Year | The year read from the whole value | 7 | 0 |
+| Attachment | `L1` read from the whole value | 10 | 0 |
+| DOI 1 | `DO` always the whole value (the first Draft) | 9 | 0 |
+| DOI 2 | `DO` always the tag line (`main`) | 9 | 0 |
+| DOI 3 | `DO` continued after any non-empty tag line | 8 | 0 |
+
+The brief's controls E, removing all continuation handling, and K, letting a continuation start a field or record, are the earlier controls E, G and M2. The 30 controls of the first version were re-applied to the revised source. Only P4 and P6 needed a new anchor, because the `finish` mapping now spans three lines. Each still fails tests of the revised suite, between 1 and 52 of the 150. The existing suites still catch only I, J, K1, N1 and N2 among those. Among the new ones they catch G, H and I. They catch none of the continuation controls.
+
+**Differential.** With the clock frozen, a 3,000-paper stored corpus was exported by all three exporters. It is a revision of the first version's corpus, adding multi-line DOIs and years:
+- **CSV and BibTeX.** 434,697 B and 920,580 B, byte-identical across `main`, the first Draft and the revision. The BibTeX summary is identical too: 3,000 papers, 389 affected, 389 DOI fields, no URL fields.
+- **RIS.** The revision's file is byte-identical to the first Draft's, at 771,288 B.
+- **Re-imported** with the first Draft's parser and the revision's, both give 2,949 papers and 51 "missing title" warnings.
+  - Every DOI, attachment link and year matches hand-stated expectations: 0 mismatches.
+  - The text fields, PMIDs, PubMed links and journal links equal the first Draft's.
+  - The DOI differs from the first Draft's for 483 papers, the year for 388 and the attachment link for 928, each as the contract states.
+
+A 2,000-record third-party corpus covered single-line records, structured abstracts and multi-line titles and journals. It also covered wrapped authors and keywords, valid and malformed multi-line DOIs, and PubMed, generic, `L2` and `L1` links, plain and continued. Multiple `UR` lines, malformed lines and unknown tags complete it. It was read in LF (746,679 B) and CR LF (783,552 B):
+- Each parser gives 2,000 papers and no warnings.
+- The 500 single-line records are identical across all three.
+- For all 2,000, the PMID, PubMed link, journal link, attachment link and year equal `main`'s.
+- The saved DOI equals `main`'s or keeps a line break (279).
+- The text fields equal the first Draft's: 1,263 records read more text than on `main`.
+- The first Draft had changed an identifier, link or year in 1,435 of them.
+
+**Timing.** These are medians of 9 interleaved runs in jsdom, load average about 8.6. They are informational, and nothing asserts a time:
+
+| Input | `main` | First Draft | Revision |
+|---|---|---|---|
+| Third-party corpus ×1 / ×2 / ×4 (0.75 / 1.49 / 2.99 MB) | 19.6 / 43.7 / 77.2 ms | 21.9 / 44.9 / 89.2 ms | 24.3 / 51.0 / 98.6 ms |
+| The stored corpus's RIS export (0.77 MB) | 15.9 ms | 19.1 ms | 30.1 ms |
+
+Work stays linear. The added cost is the DOI-name check, which runs only for a `DO` field with continuation lines. The stored corpus is adversarial in that respect: about two in five of its DOIs hold a line break.
+
+**Suites and build.** The full Vitest suite has 276 files and 9,505 tests, against 9,448 on the first Draft. Lint reports 0 errors and the same 18 warnings, none in a changed file, and the three typechecks pass. `npm ci` leaves `package.json` and `package-lock.json` unchanged, and `npm audit` finds 0 vulnerabilities, full and production. `main` `a9c40ea6`, the first Draft `9c76e2bd` and the revision's code commit `df99a188` were each built in a clean worktree, with the same installed packages and no `.env`:
+- **Files.** Of the web build's 9 files, 7 are byte-identical across all three, the CSS included, and `index.html` differs only in the entry chunk's name.
+- **Entry chunk size.** 1,985,988 B on `main`, 1,986,378 B on the first Draft and 1,986,650 B with the revision. That is 272 B more than the first Draft and 662 B more than `main`. With `gzip -9` they are 564,568, 564,776 and 564,844 B.
+- **Un-minified builds.** These show the change; a byte comparison of the minified chunks cannot localize it, because the minifier's short names shift.
+  - Against the first Draft, the entry chunk differs in 6 hunks, 16 lines added and 6 removed, all in `parseRISEntries` and `risEntryToRawPaper`.
+  - Against `main`, it differs in 18 hunks, 57 lines added and 28 removed, all in the RIS exporter, its constants and those two functions.
+  - `extractDoiFromMetadataValue` was already in the bundle.
+- **Unchanged surface.** Across the three builds, the un-minified JavaScript names the same 33 URL origins. It inlines the same `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. It makes the same number of `.rpc(`, `.from(`, `.functions.invoke(`, `.storage.from(`, `.auth.` and `fetch(` calls.
+- **Extension.** The output's 8 files and its packaged archive (`0feb935d…`, 15,788 B) are byte-identical, and its browser lane passes 30 tests.
 
 ### Evidence
 
@@ -1451,6 +1572,7 @@ The value's own leading spaces, trailing spaces, tabs and empty lines inside it 
   - nor how EndNote treats a continuation line of six spaces alone, which some programs take as a blank line.
 - **Browser.** No browser run was made: the change is in two pure functions, and the download and the import dialog are unchanged. No CI lane exports or imports a RIS file. The E2E specs only check that the RIS menu item is shown, so the Vitest suites above are the qualification.
 - **Production.** No Production export or import was run, and no Production data was read, so how many stored values hold a line break is unknown.
+- **Revision 001A** was qualified with the Vitest suites, the scratch reproduction and the differential above. No database run inserted a multi-line DOI: the deduplication semantics of `safe_bulk_insert_papers` above come from its migration source. No external reader was run on a wrapped link.
 
 ### Limitations not changed here
 
@@ -1459,12 +1581,15 @@ The value's own leading spaces, trailing spaces, tabs and empty lines inside it 
   - Zotero keeps line breaks in an abstract or note by its heuristic and joins other fields with a space.
   - rispy joins a single field with a space and makes a continued `N1` a second note.
   - JabRef keeps the six spaces between the joined lines.
-  - Zotero would split a continued `L1` into two links. A stored attachment link with a line break is not a usable link in any case.
-- **A DOI that holds a line break** is not a DOI name. PaperLume reads it back as stored, but another reader that joins its lines sees a different value. Whether such a value should instead be left out of `DO`, or moved to a PaperLume-specific field with a notice as BibTeX does, is a product decision not taken here.
+  - Zotero would split a continued `L1` into two links. A stored attachment link with a line break is not a usable link in any case, and PaperLume reads it back as its first line.
+- **A DOI that holds a line break** is not a DOI name. PaperLume reads it back with its line break when its first line is a DOI name, and as its first line otherwise, but another reader that joins its lines sees a different value. For this revision it was decided to keep that behaviour. Leaving such a value out of `DO`, or moving it to a PaperLume-specific field with a notice as BibTeX does, would be a separate decision.
+- **A link, an attachment link or a year wrapped over two lines** by another program is read as its first line. PaperLume does not put a URL together from physical lines; that would need its own interoperability contract.
+- **A tab inside a tag line's URL** is still removed by the URL parser, so `…/12`, a tab, then `3/` is the record 123, as on `main`. Only continuation lines are kept out of links.
+- **A note that continues.** `N1  - Study type:` continued by the type now gives that type as the study type, which feeds the study-type evaluation, where `main` read `Study type:`. Notes are text fields, read whole.
 - **U+2028, U+2029 and U+0085** are written unchanged. A program that ends lines at them, such as Python's `str.splitlines`, sees a line break there. Zotero replaces U+2028 and U+2029 with a space.
 - **A third-party file is read with its own line breaks.** An abstract that another program wrapped at 70 or 80 characters keeps those line breaks, and the abstract view shows them. An unindented line in such a file that is a real tag line, such as `ER  - was not reached`, still ends its field or record; no reader can tell it from a tag.
 - **Files exported before this change** with a multi-line value but no tag-like line are now read whole. A file whose value already ended its record cannot be repaired and reads as it did.
-- **Unchanged parser behaviour.** A `TY` before `ER` still drops the unfinished record; tag lines with one space before the hyphen are still ignored; a file whose only line ending is CR is still not read.
+- **Unchanged parser behaviour, kept as accepted limitations.** A `TY` before `ER` still drops the unfinished record; tag lines with one space before the hyphen are still ignored; a file whose only line ending is CR is still not read; an unindented tag-like line in prose still begins a field. None of these is claimed repaired.
 
 ### What remains
 
@@ -1475,7 +1600,8 @@ Each item is separate work, and none of it is part of this change:
 - **CSV byte order mark** interoperability; see the [CSV residual findings](#residual-findings).
 - **E2E spec coverage** (`PAPERLUME-CI-E2E-SPEC-COVERAGE-AUDIT-001`). No lane exports or imports RIS, BibTeX or CSV files.
 - **External reference-manager qualification** of RIS and BibTeX exports.
-- **Recovery of a record without `ER`** before the next `TY`, and the DOI decision above.
+- **Recovery of a record without `ER`** before the next `TY`, kept as a limitation for this change.
+- **Links wrapped over physical lines**, which would need an explicitly defined interoperability contract.
 - **Superseded Dependabot pull requests.** PRs 351–354 are still open.
 
 ## NanoID finding — REMEDIATED
