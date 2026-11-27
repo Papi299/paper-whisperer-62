@@ -23,6 +23,7 @@ import {
   type AuthorProvenanceKind,
 } from "./authorProvenance";
 import { decodeBibTeXText, readIdentifierField, stripOuterBraces } from "./bibtexCodec";
+import { extractDoiFromMetadataValue } from "./doiIdentifiers";
 import type { RawPaperData } from "./normalizePaperData";
 import {
   canonicalPubMedUrl,
@@ -310,8 +311,24 @@ export function parseBibTeX(content: string): FileParseResult {
 // RIS Parser — Line-delimited block parser
 // ══════════════════════════════════════════════════════════════
 
+/**
+ * One field of a RIS record.
+ *
+ * `value` is the whole field: its tag line and the continuation lines below
+ * it, joined with line feeds and trimmed as a whole. `tagLineValue` is the
+ * value on the tag line alone, trimmed, as this parser read a field before it
+ * read continuation lines. It is kept as it was read rather than recovered
+ * from `value` later: once a joined value is trimmed, an empty tag line
+ * followed by text can no longer be told from a tag line that held that text.
+ */
+interface RISField {
+  tag: string;
+  value: string;
+  tagLineValue: string;
+}
+
 interface RISEntry {
-  tags: Array<{ tag: string; value: string }>;
+  tags: RISField[];
 }
 
 /**
@@ -354,16 +371,23 @@ const RIS_CONTINUATION_INDENT = /^ {1,6}/;
  *     ending and others do not, are ignored, as before.
  *
  * A value is trimmed as a whole, so white space inside a multi-line value is
- * kept and a one-line value is read exactly as before. A `TY` line inside an
+ * kept and a one-line value is read exactly as before. Each field also keeps
+ * the value of its tag line alone (see `RISField`), which the link and year
+ * fields, and in some cases the DOI, are read from. A `TY` line inside an
  * unfinished record still starts a new record in its place.
  */
 function parseRISEntries(content: string): RISEntry[] {
   const entries: RISEntry[] = [];
-  // Each field's physical lines, joined once the record is complete.
+  // Each field's physical lines, joined once the record is complete. The first
+  // is always the field's tag line.
   let currentEntry: Array<{ tag: string; lines: string[] }> | null = null;
 
   const finish = (fields: Array<{ tag: string; lines: string[] }>): RISEntry => ({
-    tags: fields.map(({ tag, lines }) => ({ tag, value: lines.join("\n").trim() })),
+    tags: fields.map(({ tag, lines }) => ({
+      tag,
+      value: lines.join("\n").trim(),
+      tagLineValue: lines[0].trim(),
+    })),
   });
 
   const lines = content.split(/\r?\n/);
@@ -408,6 +432,26 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   const getAll = (tag: string): string[] =>
     entry.tags.filter((t) => t.tag === tag).map((t) => t.value).filter(Boolean);
 
+  // Continuation lines are read into the fields that hold text: titles,
+  // authors, the journal, the abstract, keywords and notes. The link and year
+  // fields (`UR`, `L2`, `L1`, `PY`, `Y1`, `DA`) are read from their tag lines
+  // alone, as they were before continuation lines were read; `DO` is described
+  // at the DOI below. Links are not read across lines because the WHATWG URL
+  // parser, used by every link check here and by every link the application
+  // renders, removes line feeds and tabs. A `UR` of
+  // `https://pubmed.ncbi.nlm.nih.gov/123` continued by `456/` would name the
+  // record 123456, which neither line names, and a continued host would name
+  // another site. A link that another program wrapped cannot be told from a
+  // link followed by unrelated text. A year is read the same way, so text on a
+  // continuation line cannot supply one or change which tag it comes from.
+  const getFirstTagLine = (tag: string): string | null => {
+    const found = entry.tags.find((t) => t.tag === tag);
+    return found ? found.tagLineValue : null;
+  };
+
+  const getAllTagLines = (tag: string): string[] =>
+    entry.tags.filter((t) => t.tag === tag).map((t) => t.tagLineValue).filter(Boolean);
+
   // Title: T1 (primary), TI (alternate), T2 (secondary/book title)
   const title = getFirst("T1") || getFirst("TI") || getFirst("T2");
   if (!title || !title.trim()) return null;
@@ -421,8 +465,8 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   ];
   const authors = authorFields.map((entry) => entry.value);
 
-  // Year: PY field, extract first 4 digits
-  const pyVal = getFirst("PY") || getFirst("Y1") || getFirst("DA");
+  // Year: PY field, extract first 4 digits (tag lines only, as above).
+  const pyVal = getFirstTagLine("PY") || getFirstTagLine("Y1") || getFirstTagLine("DA");
   const yearMatch = pyVal?.match(/(\d{4})/);
   const year = yearMatch ? parseInt(yearMatch[1], 10) : null;
 
@@ -440,7 +484,23 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
   // into `papers.pmid`, which is a deduplication key. The PMID is instead
   // recovered below from an authenticated PubMed record URL, which proves what
   // `AN` only asserts.
-  const doi = getFirst("DO");
+  //
+  // A DOI continues onto further lines only when its tag line already holds a
+  // DOI name, in any form a DOI is written in (`10.1000/x`, `doi:10.1000/x`,
+  // `https://doi.org/10.1000/x`). A stored DOI that holds a line break, which
+  // no DOI name does, then comes back with its line break; read as its first
+  // line alone, it would become a different DOI that looks valid. A `DO` tag
+  // line that holds no DOI name (empty, or only `doi:` or `https://doi.org/`)
+  // is read alone, as before. Otherwise the continuation line alone would
+  // become the DOI once the prefix is removed and the value trimmed, as every
+  // imported DOI is before it is saved. A one-line `DO` is read as before: its
+  // value is its tag line, so it is not checked at all.
+  const doField = entry.tags.find((t) => t.tag === "DO");
+  const doi = !doField
+    ? null
+    : doField.value === doField.tagLineValue || extractDoiFromMetadataValue(doField.tagLineValue) !== null
+      ? doField.value
+      : doField.tagLineValue;
 
   // Abstract
   const abstract = getFirst("AB") || getFirst("N2");
@@ -450,7 +510,8 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
 
   // URLs. The PMID comes from the first `UR` that is structurally a PubMed
   // record URL, and the stored PubMed link is that record's canonical form.
-  const urls = getAll("UR");
+  // Each `UR` is its tag line alone; an empty one is skipped, as before.
+  const urls = getAllTagLines("UR");
   const pmid = urls.reduce<string | null>(
     (found, u) => found ?? extractPmidFromPubMedUrl(u),
     null,
@@ -465,9 +526,11 @@ function risEntryToRawPaper(entry: RISEntry): RawPaperData | null {
       .filter((u) => !isPubMedRecordUrl(u))
       .map((u) => toImportableExternalUrl(u))
       .find((u): u is string => u !== null) ?? null;
-  const journal_url = toImportableExternalUrl(getFirst("L2")) ?? firstGenericUrl;
+  const journal_url = toImportableExternalUrl(getFirstTagLine("L2")) ?? firstGenericUrl;
 
-  const drive_url = getFirst("L1");
+  // The attachment link is stored as written, unvalidated, and rendered through
+  // the same URL parser, so it too is its tag line alone.
+  const drive_url = getFirstTagLine("L1");
 
   // Study type from N1 (notes)
   const noteVal = getFirst("N1");

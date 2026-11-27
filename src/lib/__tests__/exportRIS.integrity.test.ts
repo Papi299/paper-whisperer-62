@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { exportToBibTeX, exportToCSV, exportToRIS } from "../exportUtils";
+import { toSafeExternalHref } from "../externalUrl";
 import { parseRIS } from "../importParsers";
+import { normalizePaperData } from "../normalizePaperData";
 import type { PaperWithTags, Project, Tag } from "@/types/database";
 
 /**
@@ -19,8 +21,14 @@ import type { PaperWithTags, Project, Tag } from "@/types/database";
  *    and its fields in their fixed order;
  *  - a field that holds one value (title, year, journal, PMID, DOI, the three
  *    links, abstract, note) writes each further line of its value on a
- *    continuation line, six spaces and then the text, and `parseRIS` reads the
- *    value back whole, with LF where it had CR LF or CR;
+ *    continuation line, six spaces and then the text;
+ *  - `parseRIS` reads a text field (title, journal, abstract, note) back whole,
+ *    with LF where it had CR LF or CR. It reads a link or a year (`UR`, `L2`,
+ *    `L1`, `PY`, `Y1`, `DA`) from its tag line alone, as before continuation
+ *    lines were read, because the URL parser would join a link's lines into a
+ *    different link. A `DO` continues only after a tag line that holds a DOI
+ *    name, so a continuation can keep a line break in a DOI but never supply
+ *    one;
  *  - a list element (author, keyword, MeSH term, substance, tag, project)
  *    stays on its one tagged line, with each line break in it written as one
  *    space;
@@ -355,23 +363,30 @@ describe("B. several ordinary records", () => {
 
 // ── C–J. Every field that can hold a line break ──
 
-/** Fields that hold one value: their lines go on continuation lines. */
+/**
+ * Fields that hold one value: their lines go on continuation lines. A text
+ * field reads back whole. The DOI and the attachment link read back as their
+ * tag line alone here: the link always does, and `HOSTILE`'s first line holds
+ * no DOI name, so the DOI does too (see K2 for a DOI that continues).
+ */
 const SINGLE_VALUE_FIELDS: {
   name: string;
   tag: string;
   set: (value: string) => Partial<PaperWithTags>;
   read: (p: ReturnType<typeof parseRIS>["papers"][number]) => unknown;
+  readsBack: string;
+  expected: string;
 }[] = [
-  { name: "C. title", tag: "T1", set: (v) => ({ title: v }), read: (p) => p.title },
-  { name: "E. journal", tag: "JO", set: (v) => ({ journal: v }), read: (p) => p.journal },
-  { name: "F. abstract", tag: "AB", set: (v) => ({ abstract: v }), read: (p) => p.abstract },
-  { name: "H. study-type note", tag: "N1", set: (v) => ({ study_type: v }), read: (p) => p.study_type },
-  { name: "K. DOI", tag: "DO", set: (v) => ({ doi: v }), read: (p) => p.doi },
-  { name: "L. attachment link", tag: "L1", set: (v) => ({ drive_url: v }), read: (p) => p.drive_url },
+  { name: "C. title", tag: "T1", set: (v) => ({ title: v }), read: (p) => p.title, readsBack: "as the same value", expected: HOSTILE },
+  { name: "E. journal", tag: "JO", set: (v) => ({ journal: v }), read: (p) => p.journal, readsBack: "as the same value", expected: HOSTILE },
+  { name: "F. abstract", tag: "AB", set: (v) => ({ abstract: v }), read: (p) => p.abstract, readsBack: "as the same value", expected: HOSTILE },
+  { name: "H. study-type note", tag: "N1", set: (v) => ({ study_type: v }), read: (p) => p.study_type, readsBack: "as the same value", expected: HOSTILE },
+  { name: "K. DOI", tag: "DO", set: (v) => ({ doi: v }), read: (p) => p.doi, readsBack: "as its tag line alone", expected: HOSTILE_LINES[0] },
+  { name: "L. attachment link", tag: "L1", set: (v) => ({ drive_url: v }), read: (p) => p.drive_url, readsBack: "as its tag line alone", expected: HOSTILE_LINES[0] },
 ];
 
 describe("a field that holds one value keeps every line of it inside its field", () => {
-  describe.each(SINGLE_VALUE_FIELDS)("$name ($tag)", ({ tag, set, read }) => {
+  describe.each(SINGLE_VALUE_FIELDS)("$name ($tag)", ({ tag, set, read, readsBack, expected }) => {
     it("is one record, the value's lines on continuation lines, and the next record intact", async () => {
       const file = await exportRIS([paper(set(HOSTILE)), SENTINEL]);
       const records = readRecords(file);
@@ -381,11 +396,11 @@ describe("a field that holds one value keeps every line of it inside its field",
       expect(records[1]).toEqual(SENTINEL_FIELDS);
     });
 
-    it("reads back as the same value, with nothing injected", async () => {
+    it(`reads back ${readsBack}, with nothing injected`, async () => {
       const { papers, warnings } = parseRIS(await exportRIS([paper(set(HOSTILE)), SENTINEL]));
       expect(warnings).toEqual([]);
       expect(papers).toHaveLength(2);
-      expect(read(papers[0])).toBe(HOSTILE);
+      expect(read(papers[0])).toBe(expected);
       expect(papers[0].authors).toEqual([]);
       expect(papers[0].keywords).toEqual([]);
       expectNothingInjected(papers);
@@ -507,12 +522,16 @@ describe("every field at once", () => {
     expectNothingInjected(papers);
     expectSentinel(papers[0]);
     expectSentinel(papers[3]);
+    // The DOI, the attachment link and the year read their tag lines alone
+    // ("Opening line.", which holds no DOI name and no year), so the "9999" of
+    // the injected DOI on a continuation line does not become the year.
     expect(papers[1]).toMatchObject({
       title: HOSTILE,
       authors: [HOSTILE_FLAT],
       journal: HOSTILE,
-      doi: HOSTILE,
-      drive_url: HOSTILE,
+      doi: HOSTILE_LINES[0],
+      drive_url: HOSTILE_LINES[0],
+      year: null,
       abstract: HOSTILE,
       keywords: [HOSTILE_FLAT, HOSTILE_FLAT, HOSTILE_FLAT],
       study_type: HOSTILE,
@@ -625,6 +644,232 @@ describe("K. identifiers and links keep their meaning", () => {
     const { papers } = parseRIS(await exportRIS([paper({ doi: "10.5555/doionly", abstract })]));
     expect(papers).toHaveLength(1);
     expect(papers[0]).toMatchObject({ pmid: null, pubmed_url: null, doi: "10.5555/doionly", abstract, journal_url: "https://doi.org/10.5555/doionly" });
+  });
+});
+
+// ── K2. A continuation line adds nothing to a link, an identifier or a year ──
+
+const PUBMED = "https://pubmed.ncbi.nlm.nih.gov";
+
+/**
+ * Reads `lines` as the fields of one third-party record placed between two
+ * sentinel records, checks that both sentinels come through whole, and returns
+ * the middle paper. The record gets a title unless `lines` gives one.
+ */
+function readBetween(lines: string[], eol: string = LF): ReturnType<typeof parseRIS>["papers"][number] {
+  const file = [
+    ["TY  - JOUR", "T1  - Sentinel before", `UR  - ${PUBMED}/1/`, "ER  - "],
+    ["TY  - JOUR", ...(lines.some((l) => l.startsWith("T1  -")) ? [] : ["T1  - Third-party record"]), ...lines, "ER  - "],
+    ["TY  - JOUR", "T1  - Sentinel after", `UR  - ${PUBMED}/2/`, "ER  - "],
+  ]
+    .map((record) => record.join(eol))
+    .join(eol + eol);
+  const { papers, warnings } = parseRIS(file + eol);
+  expect(warnings).toEqual([]);
+  expect(papers).toHaveLength(3);
+  expect([papers[0].title, papers[0].pmid, papers[0].pubmed_url]).toEqual(["Sentinel before", "1", `${PUBMED}/1/`]);
+  expect([papers[2].title, papers[2].pmid, papers[2].pubmed_url]).toEqual(["Sentinel after", "2", `${PUBMED}/2/`]);
+  return papers[1];
+}
+
+const links = (p: ReturnType<typeof parseRIS>["papers"][number]) => ({ pmid: p.pmid, pubmed_url: p.pubmed_url, journal_url: p.journal_url });
+const RECORD_123 = { pmid: "123", pubmed_url: `${PUBMED}/123/`, journal_url: null };
+const NO_LINKS = { pmid: null, pubmed_url: null, journal_url: null };
+
+describe("K2. a continuation line adds nothing to a link, an identifier or a year", () => {
+  it("the reviewed case: PubMed record 123 continued by 456/ is still record 123", () => {
+    // The URL parser itself joins the two lines, which is why a link is never
+    // read across them.
+    expect(new URL(`${PUBMED}/123${LF}456/`).href).toBe(`${PUBMED}/123456/`);
+    const { papers, warnings } = parseRIS(["TY  - JOUR", "T1  - Example study", `UR  - ${PUBMED}/123`, "      456/", "ER  -"].join(LF));
+    expect(warnings).toEqual([]);
+    expect(papers.map(links)).toEqual([RECORD_123]);
+  });
+
+  it.each([
+    ["six spaces", [`UR  - ${PUBMED}/123`, `${INDENT}456/`]],
+    ["no indentation", [`UR  - ${PUBMED}/123`, "456/"]],
+    ["four spaces", [`UR  - ${PUBMED}/123`, "    456/"]],
+    ["eight spaces", [`UR  - ${PUBMED}/123`, `${INDENT}  456/`]],
+    ["a tab", [`UR  - ${PUBMED}/123`, "\t456/"]],
+    ["six spaces and a tab", [`UR  - ${PUBMED}/123`, `${INDENT}\t456/`]],
+    ["tag-like text", [`UR  - ${PUBMED}/123`, `${INDENT}ZZ  - 456/`]],
+    ["the legacy PubMed path", ["UR  - https://www.ncbi.nlm.nih.gov/pubmed/123", `${INDENT}4`]],
+  ])("A, J. a PubMed record continued after %s keeps its own PMID", (_name, lines) => {
+    expect(links(readBetween(lines))).toEqual(RECORD_123);
+  });
+
+  it.each([
+    ["the PubMed host with no record", [`UR  - ${PUBMED}/`, `${INDENT}999/`], `${PUBMED}/`],
+    ["a scheme alone", ["UR  - https:", `${INDENT}//pubmed.ncbi.nlm.nih.gov/999/`], null],
+    ["a cut-off host", ["UR  - https://pubmed.ncbi.nlm.nih", `${INDENT}.gov/999/`], "https://pubmed.ncbi.nlm.nih/"],
+    ["the legacy host with no path", ["UR  - https://www.ncbi.nlm.nih.gov/", `${INDENT}pubmed/999`], "https://www.ncbi.nlm.nih.gov/"],
+  ])("B. %s gains no PMID from its continuation, and stays the link it was", (_name, lines, journal_url) => {
+    expect(links(readBetween(lines))).toEqual({ pmid: null, pubmed_url: null, journal_url });
+  });
+
+  it.each([
+    ["an indented", ["UR  - ", `${INDENT}${PUBMED}/999/`]],
+    ["an unindented", ["UR  -", `${PUBMED}/999/`]],
+  ])("C. an empty UR tag line gains nothing from %s continuation", (_name, lines) => {
+    expect(links(readBetween(lines))).toEqual(NO_LINKS);
+  });
+
+  it("D. an empty L2 tag line gains nothing from its continuation, and a generic UR still fills in", () => {
+    expect(links(readBetween(["L2  - ", `${INDENT}https://journal.example/x`]))).toEqual(NO_LINKS);
+    expect(links(readBetween(["L2  - ", `${INDENT}https://journal.example/x`, "UR  - https://other.example/y"]))).toEqual({
+      ...NO_LINKS,
+      journal_url: "https://other.example/y",
+    });
+  });
+
+  it.each([
+    ["path", ["UR  - https://journal.example/articles/1", `${INDENT}2345`], "https://journal.example/articles/1"],
+    ["host", ["UR  - https://journal.example", `${INDENT}.elsewhere.example/x`], "https://journal.example/"],
+    ["query", ["UR  - https://journal.example/a", `${INDENT}?b=1`], "https://journal.example/a"],
+  ])("E. a generic UR keeps its %s", (_name, lines, journal_url) => {
+    expect(links(readBetween(lines))).toEqual({ ...NO_LINKS, journal_url });
+  });
+
+  it.each([
+    ["path", ["L2  - https://journal.example/a", `${INDENT}b`], "https://journal.example/a"],
+    ["host", ["L2  - https://journal.example", `${INDENT}.elsewhere.example/`], "https://journal.example/"],
+  ])("F. an explicit L2 keeps its %s", (_name, lines, journal_url) => {
+    expect(links(readBetween(lines))).toEqual({ ...NO_LINKS, journal_url });
+  });
+
+  it("F. a continued L2 still wins over a generic UR, and the first L2 over a second", () => {
+    expect(readBetween(["UR  - https://other.example/x", "L2  - https://journal.example/a", `${INDENT}b`]).journal_url).toBe("https://journal.example/a");
+    expect(readBetween(["L2  - https://journal.example/a", "L2  - https://journal.example/second"]).journal_url).toBe("https://journal.example/a");
+  });
+
+  it("G. among several UR lines, the first PubMed record on a tag line still supplies the PMID", () => {
+    expect(links(readBetween([`UR  - ${PUBMED}/111`, `${INDENT}222/`, `UR  - ${PUBMED}/333/`]))).toEqual({ ...NO_LINKS, pmid: "111", pubmed_url: `${PUBMED}/111/` });
+    expect(links(readBetween(["UR  - ", `${INDENT}${PUBMED}/999/`, `UR  - ${PUBMED}/123/`]))).toEqual(RECORD_123);
+    expect(links(readBetween(["UR  - https://journal.example/x", "UR  - https://journal.example/y"]))).toEqual({ ...NO_LINKS, journal_url: "https://journal.example/x" });
+  });
+
+  it.each([
+    ["text that is no URL", ["UR  - not-a-url", `UR  - ${PUBMED}/123/`]],
+    ["a continued scheme alone", ["UR  - https:", `${INDENT}//pubmed.ncbi.nlm.nih.gov/999/`, `UR  - ${PUBMED}/123/`]],
+    ["a scheme that is not http(s)", ["UR  - ftp://files.example/x", `UR  - ${PUBMED}/123/`]],
+  ])("H. %s does not hide a later PubMed UR", (_name, lines) => {
+    expect(links(readBetween(lines))).toEqual(RECORD_123);
+  });
+
+  it("I. a PubMed UR and a generic UR keep their roles, continued or not", () => {
+    expect(links(readBetween(["UR  - https://journal.example/x", `UR  - ${PUBMED}/123/`]))).toEqual({ ...RECORD_123, journal_url: "https://journal.example/x" });
+    expect(links(readBetween(["UR  - https://journal.example/x", `${INDENT}y`, `UR  - ${PUBMED}/123/`]))).toEqual({ ...RECORD_123, journal_url: "https://journal.example/x" });
+    expect(links(readBetween([`UR  - ${PUBMED}/`, `${INDENT}999/`, "UR  - https://journal.example/x"]))).toEqual({ ...NO_LINKS, journal_url: `${PUBMED}/` });
+  });
+
+  it.each([
+    ["LF", LF],
+    ["CR LF", CR + LF],
+  ])("K. with %s line endings, continued UR, L2 and L1 lines add nothing", (_name, eol) => {
+    const p = readBetween([`UR  - ${PUBMED}/123`, `${INDENT}456/`, "L2  - https://journal.example/a", `${INDENT}b`, "L1  - https://drive.example/file/a", `${INDENT}b`], eol);
+    expect(p).toMatchObject({ ...RECORD_123, journal_url: "https://journal.example/a", drive_url: "https://drive.example/file/a" });
+  });
+
+  it("L. the tag line's URL is read and normalized as before", () => {
+    expect(links(readBetween([`UR  -    ${PUBMED}/123/   `]))).toEqual(RECORD_123);
+    expect(links(readBetween([`UR  - ${PUBMED}/123/`, `${INDENT}   `]))).toEqual(RECORD_123);
+    expect(links(readBetween(["UR  - HTTPS://PUBMED.NCBI.NLM.NIH.GOV/123"]))).toEqual(RECORD_123);
+    // A tab inside the tag line itself is removed by the URL parser, as it was
+    // before this change; only continuation lines are kept out of a link.
+    expect(links(readBetween([`UR  - ${PUBMED}/12\t3/`]))).toEqual(RECORD_123);
+    expect(readBetween(["UR  - https://Journal.Example/a b"]).journal_url).toBe("https://journal.example/a%20b");
+  });
+
+  it("M, N. beside a continued UR, an abstract still reads whole and its tag-like lines stay text", () => {
+    const p = readBetween(["AB  - Results.", `${INDENT}UR  - ${PUBMED}/999/`, INDENT, `${INDENT}L2  - https://elsewhere.example/`, `UR  - ${PUBMED}/123`, `${INDENT}456/`]);
+    expect(p).toMatchObject({ ...RECORD_123, abstract: ["Results.", `UR  - ${PUBMED}/999/`, "", "L2  - https://elsewhere.example/"].join(LF) });
+  });
+
+  it("O. an ordinary DOI and PubMed record read as before", () => {
+    const p = readBetween(["DO  - 10.1000/456#789", `UR  - ${PUBMED}/12345678/`, "UR  - https://doi.org/10.1000/456%23789"]);
+    expect(p).toMatchObject({ doi: "10.1000/456#789", pmid: "12345678", pubmed_url: `${PUBMED}/12345678/`, journal_url: "https://doi.org/10.1000/456%23789" });
+  });
+
+  it("P. an AN is still no PMID, whatever its continuation lines hold", () => {
+    expect(links(readBetween(["AN  - 12345678", `${INDENT}${PUBMED}/87654321/`]))).toEqual(NO_LINKS);
+    expect(links(readBetween(["AN  - ", `${INDENT}UR  - ${PUBMED}/999/`]))).toEqual(NO_LINKS);
+  });
+
+  describe("Q. a DOI continues only after a tag line that holds a DOI name", () => {
+    it.each([
+      ["a DOI name", ["DO  - 10.1000/abc", `${INDENT}def`], `10.1000/abc${LF}def`],
+      ["a DOI name, unindented", ["DO  - 10.1000/abc", "def"], `10.1000/abc${LF}def`],
+      ["a DOI name, over three lines", ["DO  - 10.1000/abc", `${INDENT}def`, `${INDENT}ghi`], `10.1000/abc${LF}def${LF}ghi`],
+      ["a resolver URL", ["DO  - https://doi.org/10.1000/abc", `${INDENT}def`], `https://doi.org/10.1000/abc${LF}def`],
+      ["the doi: form", ["DO  - DOI: 10.1000/abc", `${INDENT}def`], `DOI: 10.1000/abc${LF}def`],
+    ])("after %s, the line break is kept", (_name, lines, doi) => {
+      expect(readBetween(lines).doi).toBe(doi);
+    });
+
+    it.each([
+      ["an empty tag line", ["DO  - ", `${INDENT}10.1000/xyz`], null],
+      ["doi: alone", ["DO  - doi:", `${INDENT}10.1000/xyz`], "doi:"],
+      ["the resolver alone", ["DO  - https://doi.org/", `${INDENT}10.1000/xyz`], "https://doi.org/"],
+      ["a prefix and a slash", ["DO  - 10.1000/", `${INDENT}abc`], "10.1000/"],
+    ])("after %s, the continuation is not read, as before", (_name, lines, doi) => {
+      expect(readBetween(lines).doi).toBe(doi);
+    });
+
+    it("once normalized for saving, a continuation adds nothing to the DOI or leaves a line break in it", () => {
+      const config = { synonymLookup: {}, poolStudyTypes: [], poolKeywords: [], synonymGroups: [] };
+      const savedDoi = (lines: string[]) => normalizePaperData(readBetween(lines), config).doi;
+      // Adds nothing: the DOI saved is the one the tag line alone gives.
+      for (const tagLine of ["DO  - ", "DO  - doi:", "DO  - https://doi.org/", "DO  - 10.1000/"]) {
+        expect(savedDoi([tagLine, `${INDENT}10.1000/xyz`])).toBe(savedDoi([tagLine]));
+      }
+      // Or keeps a line break, so it can be equal to no DOI name.
+      expect(savedDoi(["DO  - https://doi.org/10.1000/ABC", `${INDENT}def`])).toBe(`10.1000/abc${LF}def`);
+      expect(savedDoi(["DO  - doi:10.1000/abc", `${INDENT}def`])).toBe(`10.1000/abc${LF}def`);
+    });
+
+    it("a stored DOI keeps its line break, as LF; one whose first line is no DOI name comes back as that line", async () => {
+      const { papers } = parseRIS(await exportRIS([paper({ doi: `10.1000/line${CR}${LF}break` }), paper({ doi: `10.1000/${LF}tail` }), SENTINEL]));
+      expect(papers.map((p) => p.doi)).toEqual([`10.1000/line${LF}break`, "10.1000/", "10.5555/sentinel.2001"]);
+      expectSentinel(papers[2]);
+    });
+  });
+
+  describe("R. the attachment link and the year come from their tag lines", () => {
+    it.each([
+      ["a continued path", ["L1  - https://drive.example/file/a", `${INDENT}b`], "https://drive.example/file/a", "https://drive.example/file/a"],
+      ["a continued host", ["L1  - https://drive.example", `${INDENT}.elsewhere.example/x`], "https://drive.example", "https://drive.example/"],
+      ["an empty tag line", ["L1  - ", `${INDENT}https://drive.example/file/x`], null, null],
+      ["a value that is no URL", ["L1  - local-file-name.pdf", `${INDENT}second line`], "local-file-name.pdf", null],
+    ])("L1: %s", (_name, lines, drive_url, href) => {
+      const p = readBetween(lines);
+      expect(p.drive_url).toBe(drive_url);
+      expect(toSafeExternalHref(p.drive_url)).toBe(href);
+    });
+
+    it("a stored attachment link with a line break comes back as its first line, as before", async () => {
+      const { papers } = parseRIS(await exportRIS([paper({ drive_url: `https://drive.example/a${LF}b` }), SENTINEL]));
+      expect(papers[0].drive_url).toBe("https://drive.example/a");
+      expectSentinel(papers[1]);
+    });
+
+    it.each([
+      ["an empty PY, continued, then Y1", ["PY  - ", `${INDENT}2020`, "Y1  - 1999"], 1999],
+      ["a PY with no year, continued", ["PY  - n.d.", `${INDENT}2020`], null],
+      ["a PY, continued", ["PY  - 2020", `${INDENT}1999`], 2020],
+      ["an empty DA, continued", ["DA  - ", `${INDENT}2018/01/01`], null],
+      ["an empty Y1, continued, then DA", ["Y1  - ", `${INDENT}2001`, "DA  - 2002"], 2002],
+      ["digits split over two lines", ["PY  - 20", `${INDENT}21`], null],
+    ])("year: %s", (_name, lines, year) => {
+      expect(readBetween(lines).year).toBe(year);
+    });
+
+    it("a stored year that is not a number takes no year from its continuation lines", async () => {
+      const year = ["n.d.", "DO  - 10.9999/injected"].join(LF);
+      const { papers } = parseRIS(await exportRIS([paper({ year: year as unknown as number }), SENTINEL]));
+      expect(papers[0].year).toBeNull();
+      expectSentinel(papers[1]);
+    });
   });
 });
 
@@ -978,6 +1223,33 @@ describe("U. repeated export and import", () => {
     expect(third).toBe(second);
     expect(parseRIS(third).papers).toEqual(parseRIS(second).papers);
     expect(parseRIS(second).papers.map((p) => p.title)).toEqual([HOSTILE, `CR${LF}title`, "Sentinel record"]);
+  });
+
+  it("T. links, a multi-line DOI, an attachment link and a year beside multi-line text reach a fixed point", async () => {
+    const corpus = [
+      paper({
+        title: "Identifiers beside multi-line text",
+        abstract: HOSTILE,
+        pmid: "12345678",
+        doi: `10.1000/line${CR}${LF}break`,
+        journal_url: "https://journal.example/a",
+        drive_url: `https://drive.example/a${LF}b`,
+        year: ["n.d.", "DO  - 10.9999/injected"].join(LF) as unknown as number,
+      }),
+      paper({ title: "DOI whose first line is no DOI name", doi: `10.1000/${LF}tail`, year: 2020 }),
+      SENTINEL,
+    ];
+    const first = await exportRIS(corpus);
+    const second = await exportRIS(parseRIS(first).papers.map(rebuild));
+    const third = await exportRIS(parseRIS(second).papers.map(rebuild));
+    expect(readRecords(second)).toHaveLength(3);
+    expect(third).toBe(second);
+    expect(parseRIS(second).papers.map((p) => [p.pmid, p.doi, p.journal_url, p.drive_url, p.year])).toEqual([
+      ["12345678", `10.1000/line${LF}break`, "https://journal.example/a", "https://drive.example/a", null],
+      [null, "10.1000/", "https://doi.org/10.1000/%0Atail", null, 2020],
+      [null, "10.5555/sentinel.2001", "https://doi.org/10.5555/sentinel.2001", null, 2001],
+    ]);
+    expect(parseRIS(second).papers[0].abstract).toBe(HOSTILE);
   });
 });
 
