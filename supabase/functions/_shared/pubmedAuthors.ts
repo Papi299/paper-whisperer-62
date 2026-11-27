@@ -38,6 +38,7 @@ import {
   makeAuthorProvenance,
 } from "./authorProvenance.ts";
 import { decodeHTMLEntities } from "./htmlEntities.ts";
+import { xmlCharacterData } from "./xmlText.ts";
 
 /** Stable source identifier for the PubMed E-utilities path. */
 export const PUBMED_API_SOURCE = "pubmed_api";
@@ -75,9 +76,21 @@ const FORE_NAME = /<ForeName>([^<]+)<\/ForeName>/;
 const INITIALS = /<Initials>([^<]+)<\/Initials>/;
 const SUFFIX = /<Suffix>([^<]+)<\/Suffix>/;
 
-/** Strip any nested markup, decode entities, trim. Used for mixed-content text. */
+/**
+ * The text of a mixed-content field (`CollectiveName`, `Affiliation`) or of an
+ * `Identifier`, in three steps, in this order:
+ *
+ *  1. remove the markup, read on the provider's source (`./xmlText.ts`), which
+ *     keeps a CDATA section's text and any `<` that is not markup;
+ *  2. decode the references that remain, once (`./htmlEntities.ts`);
+ *  3. trim.
+ *
+ * Markup is identified before anything is decoded, so an escaped `&lt;b&gt;`
+ * ends as the text `<b>`, never as a removed tag. This is the only decoding
+ * these values get before they reach `author_provenance`.
+ */
 function plainText(value: string): string {
-  return decodeHTMLEntities(value.replace(/<[^>]+>/g, "")).trim();
+  return decodeHTMLEntities(xmlCharacterData(value)).trim();
 }
 
 export interface PubMedAuthorExtraction {
