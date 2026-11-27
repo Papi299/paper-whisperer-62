@@ -1711,7 +1711,7 @@ Review approved the Edge implementation and found one remaining blocker: how its
 
 | Example | Provider text | `main` stores | The Draft's Edge returns | The Draft stores | The revision stores |
 |---|---|---|---|---|---|
-| A | `AT&T and p < 0.05; invalid &#x110000;`, unescaped, in a PubMed title or abstract or a Crossref abstract | the text as written | `AT&amp;T and p &lt; 0.05; invalid &#x110000;` | `AT&amp;T and p &lt; 0.05; invalid &#x110000;` | `AT&T and p < 0.05; invalid &#x110000;` |
+| A | `AT&T and p < 0.05; invalid &#x110000;`, unescaped, in a PubMed title or abstract or a Crossref abstract | the text as written in a title or a Crossref abstract; a PubMed abstract is cut at the `<`, to `AT&T and p ` | `AT&amp;T and p &lt; 0.05; invalid &#x110000;` | `AT&amp;T and p &lt; 0.05; invalid &#x110000;` | `AT&T and p < 0.05; invalid &#x110000;` |
 | B | `<![CDATA[Literal &lt;]]>` | nothing: `main` removes the section, and a title that is only that section is rejected | `Literal &amp;lt;` | `Literal <` | `Literal &lt;` |
 | C | `A &amp; B &#x110000; C &lt; D` | `A &amp; B &#x110000; C &lt; D` | the same | the same | `A & B &#x110000; C < D` |
 | D | `Value &amp;lt; text` | `Value < text` | `Value &amp;lt; text` | `Value < text` | `Value &lt; text` |
