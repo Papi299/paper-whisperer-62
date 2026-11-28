@@ -25,6 +25,7 @@ import { canonicalDoiUrl, detectIdentifier } from "../_shared/identifierDetectio
 import type { AuthorProvenance } from "../_shared/authorProvenance.ts";
 import { extractCrossrefAuthors } from "../_shared/crossrefAuthors.ts";
 import { decodeHTMLEntities } from "../_shared/htmlEntities.ts";
+import { crossrefAbstract, pubmedAbstract, pubmedArticleTitle } from "./metadataText.ts";
 import { extractPubMedAuthors } from "../_shared/pubmedAuthors.ts";
 import { extractPubMedArticleDoi } from "../_shared/pubmedArticleIdentifiers.ts";
 import {
@@ -117,9 +118,15 @@ function requireEdgeEnvLogged(name: "SUPABASE_URL" | "SUPABASE_ANON_KEY"): strin
   }
 }
 
-// `decodeHTMLEntities` moved to `../_shared/htmlEntities.ts` unchanged: the
-// PubMed author extractor needs the same decoding, and a second copy is how two
-// subtly different decoders begin.
+// `decodeHTMLEntities` lives in `../_shared/htmlEntities.ts`, shared with the
+// PubMed author and DOI extractors: a second copy is how two subtly different
+// decoders begin. It decodes each reference once (CODEQL-EDGE-TEXT-EXTRACTION-001).
+//
+// Which fields are decoded here is deliberate and unchanged. Keywords are
+// decoded here; the title and abstract are NOT. They leave this function as
+// escaped character data with the markup removed (`./metadataText.ts`), and the
+// client's `normalizePaperData` decodes them once. Decoding them here as well
+// would decode them twice.
 
 // ── Rate Limiting & Retry ──
 //
@@ -179,9 +186,10 @@ async function fetchFromPubMed(
 
     const tParseStart = performance.now();
 
-    const title = xml
-      .match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/)?.[1]
-      ?.replace(/<[^>]+>/g, "");
+    // The first ArticleTitle element, its inline markup (`<i>`, `<sub>`,
+    // MathML…) removed by a lexer that reads quoted attributes, CDATA and
+    // comments whole, and its references left for the client to decode.
+    const title = pubmedArticleTitle(xml);
 
     // Author extraction moved to `../_shared/pubmedAuthors.ts`, which produces
     // the same compatibility list it always did AND the structured provenance
@@ -204,12 +212,9 @@ async function fetchFromPubMed(
     const doi = extractPubMedArticleDoi(xml);
 
     const tAbstractStart = performance.now();
-    const abstractMatch = xml.match(
-      /<AbstractText[^>]*>([\s\S]*?)<\/AbstractText>/g
-    );
-    const abstract = abstractMatch
-      ? abstractMatch.map((a) => a.replace(/<[^>]+>/g, "")).join(" ")
-      : null;
+    // Every AbstractText element, as before — a structured abstract's sections
+    // joined with one space, its labels not included — each read as the title is.
+    const abstract = pubmedAbstract(xml);
     const tAbstractMs = performance.now() - tAbstractStart;
 
     const keywordMatches = xml.matchAll(
@@ -321,7 +326,7 @@ async function searchPubMedByTitle(title: string, apiKey?: string): Promise<stri
 
 /**
  * Maps raw Crossref API response to our standardized PaperMetadata schema.
- * Strips JATS XML tags from abstracts, returns empty arrays for missing fields.
+ * Reads the text out of a JATS abstract, returns empty arrays for missing fields.
  */
 function mapCrossrefToSchema(
   work: Record<string, unknown>,
@@ -353,14 +358,13 @@ function mapCrossrefToSchema(
   const journal = (work["container-title"] as string[])?.[0] || null;
   const doi = (work.DOI as string) || null;
 
-  // Strip JATS XML tags from abstract
+  // The abstract is a JATS fragment (`<jats:p>`, `<jats:sec>`…), or plain text.
+  // Its markup is removed as the PubMed title's is, and its references are left
+  // for the client to decode. A JATS block boundary (paragraph, section title,
+  // list item…) separates words: one space is written where removing it would
+  // otherwise join two words, and only there.
   const rawAbstract = (work.abstract as string) || "";
-  const abstract =
-    rawAbstract
-      .replace(/<jats:[^>]+>/g, "")
-      .replace(/<\/jats:[^>]+>/g, "")
-      .replace(/<[^>]+>/g, "")
-      .trim() || null;
+  const abstract = crossrefAbstract(rawAbstract);
 
   // Crossref 'type' field (e.g., "journal-article") as study type
   const crossrefType = (work.type as string) || null;

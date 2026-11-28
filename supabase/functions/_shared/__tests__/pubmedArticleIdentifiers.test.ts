@@ -171,3 +171,100 @@ describe("extractPubMedArticleDoi — structural boundaries", () => {
     expect(extractPubMedArticleDoi(efetchDocument(one, book))).toBeNull();
   });
 });
+
+describe("extractPubMedArticleDoi — a DOI whose XML refers to no character (001C)", () => {
+  // PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001C. The decoder keeps such a
+  // reference as written, so the malformed `10.1000/a&#x110000;` and the
+  // well-formed `10.1000/a&amp;#x110000;` used to give the same DOI text. A
+  // DOI is identity, so the malformed one is now no DOI at all.
+  const own = (...values: string[]) => extractPubMedArticleDoi(doc({ ownIds: values.map((v) => articleId("doi", v)) }));
+  const BOLD_A = String.fromCodePoint(0x1d400);
+
+  it.each<[string, string | null]>([
+    ["10.1000/a&amp;b", "10.1000/a&b"],
+    ["10.1000/a&amp;lt;b", "10.1000/a&lt;b"],
+    ["10.1000/a&#x110000;", null],
+    ["10.1000/a&#1114112;", null],
+    ["10.1000/a&#0;", null],
+    ["10.1000/a&#xD800;", null],
+    ["10.1000/a&#xDC00;", null],
+    ["10.1000/a&#xD835;&#xDC00;", null],
+    ["10.1000/a&amp;#x110000;", "10.1000/a&#x110000;"],
+    ["10.1000/a&amp;#0;", "10.1000/a&#0;"],
+    ["10.1000/a&#x1D400;", `10.1000/a${BOLD_A}`],
+    ["10.1000/a&#119808;", `10.1000/a${BOLD_A}`],
+  ])("%s gives %s", (xml, expected) => {
+    expect(own(xml)).toBe(expected);
+  });
+
+  it("the malformed and the well-formed spelling no longer give the same DOI", () => {
+    // Before 001C both gave `10.1000/q2&#x110000;`. The matcher sees decoded
+    // DOIs only, so it could not tell the two apart.
+    expect(own("10.1000/q2&#x110000;")).toBeNull();
+    expect(own("10.1000/q2&amp;#x110000;")).toBe("10.1000/q2&#x110000;");
+    expect(own("10.1000/q2&#38;#x110000;")).toBe("10.1000/q2&#x110000;");
+    expect(own("10.1000/q2&#x26;#0;")).toBe("10.1000/q2&#0;");
+  });
+
+  it.each<[string, string]>([
+    ["decimal, leading zeros", "10.1000/a&#0000;"],
+    ["hexadecimal, leading zeros", "10.1000/a&#x000110000;"],
+    ["a long decimal run", `10.1000/a&#${"9".repeat(10_000)};`],
+    ["a long hexadecimal run", `10.1000/a&#x${"f".repeat(10_000)};`],
+    ["U+0001", "10.1000/a&#1;"],
+    ["U+0008", "10.1000/a&#x8;"],
+    ["U+000B", "10.1000/a&#xB;"],
+    ["U+000C", "10.1000/a&#12;"],
+    ["U+001F", "10.1000/a&#x1F;"],
+    ["U+FFFE", "10.1000/a&#xFFFE;"],
+    ["U+FFFF", "10.1000/a&#65535;"],
+    ["a surrogate in lowercase hexadecimal", "10.1000/a&#xdbff;"],
+    ["a surrogate in decimal", "10.1000/a&#57343;"],
+    ["among valid references", "10.1000/a&amp;b&#x110000;&lt;c"],
+  ])("%s is malformed", (_name, xml) => {
+    expect(own(xml)).toBeNull();
+  });
+
+  it("valid references still decode, leading zeros and long zero runs included", () => {
+    expect(own("10.1000/a&#x0000041;")).toBe("10.1000/aA");
+    expect(own(`10.1000/a&#${"0".repeat(10_000)}65;`)).toBe("10.1000/aA");
+    expect(own("10.1000/a&#x10FFFF;")).toBe(`10.1000/a${String.fromCodePoint(0x10ffff)}`);
+    // Tab, line feed and carriage return are XML characters: decoded as before.
+    expect(own("10.1000/a&#9;b&#xA;c&#13;d")).toBe("10.1000/a\tb\nc\rd");
+  });
+
+  it("one malformed entry makes the own DOI evidence unusable, whatever the others say", () => {
+    expect(own("10.1000/ok", "10.1000/ok&#x110000;")).toBeNull();
+    expect(own("10.1000/ok&#x110000;", "10.1000/ok")).toBeNull();
+    expect(own("10.1000/ok&#0;", "10.1000/ok&#0;")).toBeNull();
+    expect(own("10.1000/ok", "10.1000/OK", "10.1000/other&#xD800;")).toBeNull();
+    expect(own("", "10.1000/ok&#xFFFE;")).toBeNull();
+  });
+
+  it("keeps the equivalent and conflicting rules for well-formed entries", () => {
+    expect(own("10.1000/Same", "10.1000/SAME")).toBe("10.1000/Same");
+    expect(own("10.1000/one", "10.1000/two")).toBeNull();
+    expect(own("10.1000/lit&amp;#0;", "10.1000/LIT&amp;#0;")).toBe("10.1000/lit&#0;");
+    // An empty entry is still no DOI, not a malformed one.
+    expect(own("", "10.1000/ok")).toBe("10.1000/ok");
+  });
+
+  it("judges only the article's own DOI entries", () => {
+    expect(extractPubMedArticleDoi(doc({ ownIds: [articleId("pii", "S0&#x110000;"), articleId("doi", "10.1000/ok")] }))).toBe(
+      "10.1000/ok",
+    );
+    const citedMalformed = [referenceList(reference("Cited.", [articleId("doi", "10.1000/cited&#x110000;")]))];
+    expect(extractPubMedArticleDoi(doc({ ownIds: [articleId("doi", "10.1000/ok")], referenceLists: citedMalformed }))).toBe(
+      "10.1000/ok",
+    );
+    // No own DOI and a malformed cited one: no DOI, as before.
+    expect(extractPubMedArticleDoi(doc({ referenceLists: citedMalformed }))).toBeNull();
+  });
+
+  it("does not take text that is not a character reference for one", () => {
+    // Outside the rule, and read as before: XML's hexadecimal form takes a
+    // lowercase x, and a reference needs its semicolon.
+    expect(own("10.1000/a&#X110000;")).toBe("10.1000/a&#X110000;");
+    expect(own("10.1000/a&#0")).toBe("10.1000/a&#0");
+  });
+});

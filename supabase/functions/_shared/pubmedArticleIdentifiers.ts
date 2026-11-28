@@ -21,10 +21,27 @@
  * is read here. Everything else (references, abstracts, titles, `ELocationID`,
  * comments) is never consulted, and nothing substitutes for a missing DOI.
  *
+ * ## A DOI whose XML is malformed
+ *
+ * PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001C. The shared decoder keeps a
+ * character reference whose value is not an XML `Char` as written. For prose
+ * that is the right failure: the reader sees what the provider sent. For a DOI
+ * it is not, because a DOI is identity. The malformed `10.1000/a&#x110000;`
+ * would decode to the text `10.1000/a&#x110000;`, which is exactly what the
+ * well-formed `10.1000/a&amp;#x110000;` states: a different DOI name, which
+ * someone may request. Once decoded the two cannot be told apart, so the
+ * distinction is made on the XML as PubMed wrote it, with the decoder's own
+ * pattern and `Char` rule (`hasNonCharacterReference`).
+ *
+ * Such a DOI is not the article's DOI. The record keeps its PMID and every other
+ * field and has no DOI. Nothing replaces the DOI, no resolver URL is built from
+ * it, and it is never evidence that the record names a requested DOI. A doubly
+ * escaped DOI is not repaired either: it is decoded once, to the name it states.
+ *
  * Pure, with no Deno APIs or remote imports, so Vitest tests it directly.
  */
 
-import { decodeHTMLEntities } from "./htmlEntities.ts";
+import { decodeHTMLEntities, hasNonCharacterReference } from "./htmlEntities.ts";
 import { doiNamesAreEquivalent } from "./identifierDetection.ts";
 
 /** One `PubmedArticle` element. The DTD does not nest them. */
@@ -64,17 +81,20 @@ const DOI_ARTICLE_ID = /<ArticleId\s+IdType\s*=\s*(["'])doi\1\s*>([^<]*)<\/Artic
  *   before any `ObjectList`/`ReferenceList`, as the DTD requires.
  * - Each `IdType="doi"` value goes through the shared `decodeHTMLEntities`
  *   once (`10.1000/a&amp;b` → `10.1000/a&b`), the decoder the keyword and
- *   author extraction already use. Its replacements run in sequence, so the
- *   rare `&amp;lt;` comes out as `<` rather than the literal `&lt;`. Nothing
+ *   author extraction already use. It reads each reference once, so
+ *   `&amp;lt;` is the literal `&lt;`, the DOI name the XML states. Nothing
  *   else is changed: no trimming, case folding, percent-decoding or
  *   normalization. Comparing DOIs is `doiNamesAreEquivalent`'s job, not this
  *   parser's.
+ * - A DOI value whose XML holds a character reference to no XML character
+ *   (`&#x110000;`, `&#0;`, a surrogate such as `&#xD800;`) is malformed, and
+ *   the result is `null`, whatever the record's other DOI entries say.
  * - The DTD does not limit `ArticleIdList` to one DOI. Several DOI entries
  *   that are the same DOI keep the first spelling; DOIs that disagree make
  *   the result `null` rather than picking one.
  *
  * @returns The article's DOI in PubMed's spelling, entity-decoded, or `null`
- *   when the article itself states none.
+ *   when the article itself states none, or none that is well formed.
  */
 export function extractPubMedArticleDoi(xml: string): string | null {
   if ((xml.match(PUBMED_RECORD_OPEN) ?? []).length !== 1) return null;
@@ -91,9 +111,12 @@ export function extractPubMedArticleDoi(xml: string): string | null {
   const lists = [...ownPart.matchAll(ARTICLE_ID_LIST)];
   if (lists.length !== 1) return null;
 
-  const dois = [...lists[0][1].matchAll(DOI_ARTICLE_ID)]
-    .map((match) => decodeHTMLEntities(match[2]))
-    .filter((doi) => doi.length > 0);
+  const values = [...lists[0][1].matchAll(DOI_ARTICLE_ID)].map((match) => match[2]);
+  // One malformed entry makes the record's own DOI evidence unusable, rather
+  // than leaving a choice among entries of which one is not a DOI name.
+  if (values.some((value) => hasNonCharacterReference(value))) return null;
+
+  const dois = values.map((value) => decodeHTMLEntities(value)).filter((doi) => doi.length > 0);
   if (dois.length === 0) return null;
 
   const [first] = dois;
