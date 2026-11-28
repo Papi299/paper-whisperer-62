@@ -1793,7 +1793,7 @@ Review of revision 001A returned `PAPERLUME_CODEQL_EDGE_TEXT_EXTRACTION_001A_REL
 
 ### What the Edge writes for a stale tab (001B)
 
-**Why the old decoder fails.** A tab opened before the Vercel release keeps `main`'s decoder, which is copied byte for byte into `fetch-paper-metadata/__tests__/fixtures/staleClientDecoder.ts`. It replaces hexadecimal references, then decimal ones, then `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and `&nbsp;`, each pass reading the previous pass's output. When `String.fromCodePoint` throws, it returns the whole field unchanged, and the Edge output has its stray `&` and `<` escaped, so the escapes are stored.
+**Why the old decoder fails.** A tab opened before the Vercel release keeps `main`'s decoder, which is kept byte for byte, as data, in `fetch-paper-metadata/__tests__/fixtures/staleClientDecoder.main.ts.txt`. It replaces hexadecimal references, then decimal ones, then `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and `&nbsp;`, each pass reading the previous pass's output. When `String.fromCodePoint` throws, it returns the whole field unchanged, and the Edge output has its stray `&` and `<` escaped, so the escapes are stored.
 
 **The reviewer's candidate, measured.** Writing an out-of-range reference with its `&` escaped (`&amp;#x110000;`) makes both decoders read it as the text `&#x110000;`. It and its extensions were measured with the exact decoders on 300,000 generated field contents in each of the three readings, 900,000 fields. "The target" is the approved lexer's reading decoded once by the independent `specDecode`:
 
@@ -2065,20 +2065,20 @@ None of the limitations affects the merge, for the reason above.
 
 ### Evidence (001B)
 
-- **Tests.** 141 new tests and 8 changed expectations, all in the Edge suites:
+- **Tests.** 143 new tests and 8 changed expectations, all in the Edge suites:
   - `_shared/__tests__/xmlText.test.ts`, 89 more. They cover the 27 hand-written vectors of the new rule, in `DECODER_NEUTRAL_VECTORS`; 21 rewritten references, each of which decodes exactly as before in both decoders; 27 references that are still copied as written; 3 more decoding rows; and 11 bounded-work tests, one of which checks that a 100,000-digit reference's value is read only a few digits deep;
   - `_shared/__tests__/pubmedAuthorsText.test.ts`, 5 more: collective names holding each rewritten kind decode at the Edge exactly as before;
-  - `fetch-paper-metadata/__tests__/staleClientCompatibility.test.ts`, 16, new. It tests state C with `main`'s decoder, copied byte for byte (git blob `d2d9b39e`) and swapped into the real `normalizePaperData`. It covers Example A in all three fields, the 001A representation that made it fail, the other references the old decoder read differently, the named cascade that remains, and 4,000 generated contents per field;
+  - `fetch-paper-metadata/__tests__/staleClientCompatibility.test.ts`, 18, new. It tests state C with `main`'s decoder, byte for byte: the suite checks the fixture's git blob hash (`d2d9b39e`), compiles it with TypeScript and swaps it into the real `normalizePaperData`. It covers Example A in all three fields, the 001A representation that made it fail, the other references the old decoder read differently, the named cascade that remains, and 4,000 generated contents per field. The fixture is data, not a source file: committed as `staleClientDecoder.ts`, it was the code CodeQL alert 6 reports, and the pull request's analysis raised alert 19 (`js/double-escaping`, high) on it. Dismissing that alert or excluding tests from scanning was not authorized, and nothing may import that decoder, so it is now a `.ts.txt` file;
   - `fetch-paper-metadata/__tests__/identifierQualification.test.ts`, 31, new: the article DOI, its resolver URL and its stored form for each case above, several own DOIs, matching, the DOI lookup's choice of provider, and the client's labels.
 
   **Changed expectations.** Eight tests asserted the Edge representation of `&#x110000;`: Example A in four fields and Example C in two in `edgeClientDecoding.test.ts`, a Crossref row in `metadataText.test.ts`, and the "copied as written" vector of `xmlTextVectors.ts`. Each now expects `&amp;#x110000;`. The stored text the same rows assert is unchanged, and no other expectation changed.
-- **Failing before, passing after.** With 001A's `xmlText.ts` put back, 61 of the 4,395 focused tests fail, 53 of them new; with 001B none fails. In the matrix, the two Example A checks of state C move from worse than Production to ok.
-- **Negative controls.** The 19 client and 27 Edge controls of 001A were rebuilt on 001B, and 20 new controls target it, each made by asserted replacements in a scratch tree. The 4,395 focused tests ran in every tree. The unmodified tree passed all of them, with no timeout, and every control failed:
+- **Failing before, passing after.** With 001A's `xmlText.ts` put back, 62 of the 4,397 focused tests fail, 54 of them new; with 001B none fails. In the matrix, the two Example A checks of state C move from worse than Production to ok.
+- **Negative controls.** The 19 client and 27 Edge controls of 001A were rebuilt on 001B, and 20 new controls target it, each made by asserted replacements in a scratch tree. The 4,397 focused tests ran in every tree. The unmodified tree passed all of them, with no timeout, and every control failed:
 
-  | 001B control | Failing, of 4,395 | In new tests | In changed tests | In unchanged tests |
+  | 001B control | Failing, of 4,397 | In new tests | In changed tests | In unchanged tests |
   |---|---|---|---|---|
-  | 001A's `xmlText.ts` (failing before) | 61 | 53 | 8 | 0 |
-  | References above U+10FFFF copied | 31 | 23 | 8 | 0 |
+  | 001A's `xmlText.ts` (failing before) | 62 | 54 | 8 | 0 |
+  | References above U+10FFFF copied | 32 | 24 | 8 | 0 |
   | U+0000 copied | 10 | 10 | 0 | 0 |
   | References to `&` copied | 13 | 13 | 0 | 0 |
   | Only hexadecimal references to `&` rewritten | 8 | 8 | 0 | 0 |
@@ -2091,7 +2091,7 @@ None of the limitations affects the merge, for the reason above.
   | Every numeric reference escaped | 33 | 24 | 1 | 8 |
   | CDATA text escaped twice | 27 | 3 | 0 | 24 |
   | Entity references escaped as well | 62 | 14 | 5 | 43 |
-  | The lexer's output read again, `&amp;#` turned back into `&#` | 61 | 50 | 8 | 3 |
+  | The lexer's output read again, `&amp;#` turned back into `&#` | 62 | 51 | 8 | 3 |
   | A long reference taken to be out of range by its length | 2 | 2 | 0 | 0 |
   | No early stop when reading a value | 1 | 1 | 0 | 0 |
   | The article DOI decoded twice | 13 | 9 | 0 | 4 |
@@ -2162,18 +2162,20 @@ On the revision's code commit `dcec01f6` (tree `ab6a9b7d`), in the repository ch
 
 ### Local validation (001B)
 
-On the code commit `afad0846` (tree `f3edea46`), in the repository checkout on 2026-11-28, with the development machine's load average between 4 and 12:
+On the code commits `afad0846` and `fac71caf` (tree `0e34b388`; the second changes only the stale-tab suite and its fixture), in the repository checkout on 2026-11-28, with the development machine's load average between 4 and 13:
 
 - **Install and audits.** `package.json` and `package-lock.json` are unchanged. A fresh `npm ci` in a clean tree passed, `npm ls --all` reports no problem, and `npm audit` finds 0 full and 0 production findings.
-- **Lint and types.** Lint reports 0 errors and the same 18 warnings, none in a changed file. The three typechecks pass. A strict `tsc` pass over 20 Edge modules and suites, which CI does not type-check, reported 0 diagnostics.
-- **Vitest.** 285 files and 10,129 tests passed on the first run, against 283 and 9,988 on 001A; the difference is the two new files and the 141 new tests.
+- **Lint and types.** Lint reports 0 errors and the same 18 warnings, none in a changed file. The three typechecks pass. A strict `tsc` pass over 19 Edge modules and suites, which CI does not type-check, reported 0 diagnostics.
+- **Vitest.** 285 files and 10,131 tests passed on the first run, against 283 and 9,988 on 001A; the difference is the two new files and the 143 new tests.
 - **Previous releases.** The CSV security (111), RIS integrity (150), BibTeX integrity (114), BibTeX codec (155) and round-trip (51) suites pass with unchanged counts.
 - **The extension.** `npm run test:extension:browser` passes 30 of 30.
-- **Build comparison.** The Extension-qualified commit `72ba7279`, the 001A head `c32309ac` and this commit were built from clean `git archive` trees, with one fresh `npm ci` and the same placeholder environment. All 18 artifacts of the web build, the extension build and the packaged extension are byte-identical across the three, among them the entry chunk `index-D9nthVvX.js`, the normalization worker and the archive `0feb935d…`. Between `72ba7279` and this commit, nothing under `src/`, `extension/`, `public/` or `scripts/` changed, and neither did the package files, the Vite configurations, `vercel.json`, `index.html` or `supabase/config.toml`.
+- **Build comparison.** The Extension-qualified commit `72ba7279`, the 001A head `c32309ac` and `afad0846` were built from clean `git archive` trees, with one fresh `npm ci` and the same placeholder environment. All 18 artifacts of the web build, the extension build and the packaged extension are byte-identical across the three, among them the entry chunk `index-D9nthVvX.js`, the normalization worker and the archive `0feb935d…`. Between `72ba7279` and this commit, nothing under `src/`, `extension/`, `public/` or `scripts/` changed, and neither did the package files, the Vite configurations, `vercel.json`, `index.html` or `supabase/config.toml`.
 
 ### CodeQL (Q2)
 
 The change removes the expressions the five alerts point at: the single-pass `<[^>]+>` removals in `plainText`, the title, the abstract and the Crossref chain, and the replacement sequence in `decodeHTMLEntities`. It adds no code of either kind: the decoder is one `replace` with a callback, and the lexer reads the input once. That is what makes it correct, not a way of hiding a pattern from the query. The only `replace` calls added are the decoder and a three-character escape of CDATA text.
+
+**Alert 19 (001B), on the pull request only.** The first 001B push added `main`'s client decoder as a test fixture, byte for byte, so that the stale-tab state runs against the real thing, and CodeQL reported it as `js/double-escaping` (high), the pattern of alert 6, in `fetch-paper-metadata/__tests__/fixtures/staleClientDecoder.ts`. No shipped code held it. The fixture is now data (`staleClientDecoder.main.ts.txt`) that the suite verifies by its git blob hash and compiles at test time; the alert was neither dismissed nor suppressed, and the CodeQL configuration is unchanged.
 
 **Alert 6 (001A).** It is `js/double-escaping` at `src/lib/decodeHTMLEntities.ts` lines 13–20 on `main` `4c454769`: the chain of `.replace` calls in which `&amp;` becomes `&` before `&lt;` and the others are replaced, so a `&` one replacement produces is unescaped again. Its one instance is on `refs/heads/main`; it is open. That chain is gone: the client decoder is now one `replace` whose callback decodes each reference of the input once, plus a lookahead that only reads the original input. Q3 is not complete because the alert may close: the second decoding of fields the Edge already decoded, the list view's decoder and the HTML-sink guard remain.
 
