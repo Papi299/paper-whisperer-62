@@ -49,8 +49,12 @@ const staleSource = readFileSync(new URL("./fixtures/staleClientDecoder.main.ts.
 const gitBlobId = (bytes: Buffer): string =>
   createHash("sha1").update(`blob ${bytes.length}${String.fromCharCode(0)}`).update(bytes).digest("hex");
 
-function compileStaleDecoder(source: string): Decoder {
-  const { outputText } = ts.transpileModule(source, {
+function compileStaleDecoder(bytes: Buffer): Decoder {
+  // The bytes are run as code below, so they are checked first: anything but
+  // main's decoder stops the whole suite here, before any of it runs.
+  const blob = gitBlobId(bytes);
+  if (blob !== STALE_DECODER_BLOB) throw new Error(`the stale decoder fixture is blob ${blob}, not main's ${STALE_DECODER_BLOB}`);
+  const { outputText } = ts.transpileModule(bytes.toString("utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   });
   const module = { exports: {} as { decodeHTMLEntities?: Decoder } };
@@ -59,7 +63,7 @@ function compileStaleDecoder(source: string): Decoder {
   return module.exports.decodeHTMLEntities;
 }
 
-const staleClient = compileStaleDecoder(staleSource.toString("utf8"));
+const staleClient = compileStaleDecoder(staleSource);
 
 const C = (...codePoints: number[]) => String.fromCodePoint(...codePoints);
 const CONFIG = { synonymLookup: {}, poolStudyTypes: [], poolKeywords: [], synonymGroups: [] };
