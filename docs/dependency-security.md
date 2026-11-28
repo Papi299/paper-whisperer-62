@@ -2216,6 +2216,8 @@ None of the limitations affects the merge, for the reason above.
   - in `identifierQualification.test.ts`, the four malformed rows, now no DOI, and two match rows, now `missing` instead of `mismatch`. The collision itself was a `match`; the new tests cover it.
 
   The extended test adds a malformed entry to the several-own-DOIs check. No other expectation changed.
+
+  **Test hygiene.** The stale-tab suite used to compile main's decoder from its data fixture and run it when the module loaded, before the test that checks the fixture's blob hash. Changed bytes would have run first, and the other tests would have used them. Since `b0901d71` the hash is checked before compiling. A fixture changed to throw if run showed the difference: before, it ran; now the hash check stops the suite and names the wrong blob.
 - **Failing before, passing after.** With 001B's `pubmedArticleIdentifiers.ts` put back, 35 of the 4,489 focused tests fail: the 27 new tests of the rule and the 8 changed ones. With 001C, none fails.
 - **Negative controls.** Built like 001B's, each from one asserted replacement in a scratch tree, and run on the 4,489 focused tests. The unmodified tree passed all of them, and every control failed:
 
@@ -2318,11 +2320,11 @@ On the code commits `afad0846` and `fac71caf` (tree `0e34b388`; the second chang
 
 ### Local validation (001C)
 
-On the code commit `cedf0b76` (tree `a54245e1`), in the repository checkout on 2026-11-28:
+On the code commits `cedf0b76` (tree `a54245e1`) and `b0901d71` (tree `22cf3ab3`; the second changes only the stale-tab suite), in the repository checkout on 2026-11-28:
 
 - **Packages.** `package.json` and `package-lock.json` are unchanged. `npm audit` finds 0 full and 0 production findings.
 - **Lint and types.** Lint reports 0 errors and the same 18 warnings, none in a changed file. The three typechecks pass. The strict `tsc` pass over the Edge modules and suites now covers 20 files, and reports 0 diagnostics.
-- **Vitest.** 285 files and 10,209 tests passed on the first run, against 285 and 10,131 on 001B; the difference is the 78 new tests.
+- **Vitest.** 285 files and 10,209 tests passed on the first run on each of the two commits, against 285 and 10,131 on 001B; the difference is the 78 new tests.
 - **Builds and the extension.** Since 001B, nothing has changed under `src/`, `extension/`, `public/` or `scripts/`. Neither have the package files, the Vite configurations, `vercel.json`, `index.html` or `supabase/config.toml`. So 001B's build comparison and the Extension qualification of `72ba7279` still apply.
 
 ### CodeQL (Q2)
