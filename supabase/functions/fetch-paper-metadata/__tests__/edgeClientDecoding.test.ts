@@ -224,11 +224,13 @@ describe("PubMed authors across the boundary", () => {
 });
 
 describe("the article DOI is decoded once, at the Edge, and never by the client", () => {
-  it.each([
+  it.each<[string, string, string | null]>([
     ["a number sign", "10.1000/456#789", "10.1000/456#789"],
     ["an escaped ampersand", "10.5555/Q2A&amp;X", "10.5555/q2a&x"],
     ["a doubly escaped ampersand keeps one level", "10.5555/Q2A&amp;amp;X", "10.5555/q2a&amp;x"],
-    ["an invalid reference", "10.5555/q2a&#x110000;", "10.5555/q2a&#x110000;"],
+    // 001C: a DOI whose XML holds a reference to no character is not used.
+    ["an invalid reference", "10.5555/q2a&#x110000;", null],
+    ["the same text, written well formed", "10.5555/Q2A&amp;#x110000;", "10.5555/q2a&#x110000;"],
   ])("%s", (_name, source, stored) => {
     const doi = extractPubMedArticleDoi(efetchDocument(pubmedArticle({ ownIds: [articleId("doi", source)] })));
     expect(normalize({ doi }).doi).toBe(stored);

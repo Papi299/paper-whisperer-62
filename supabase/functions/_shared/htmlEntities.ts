@@ -49,6 +49,11 @@
  * as the value passes U+10FFFF, so no intermediate value grows with the length
  * of the reference.
  *
+ * `hasNonCharacterReference` says whether a text holds such a reference, read
+ * with the same pattern and the same rule. Prose keeps one as text. A DOI
+ * holding one is malformed, and `pubmedArticleIdentifiers.ts` rejects that DOI
+ * (revision 001C).
+ *
  * This decodes references in text. It is not an XML or HTML parser and not a
  * sanitizer: its output is text, which may legitimately hold `<` or `&`.
  */
@@ -104,16 +109,37 @@ function codePointOf(digits: string, radix: 10 | 16): number | null {
   return value;
 }
 
+/**
+ * The code point a decimal or hexadecimal reference names when it is an XML
+ * `Char`, otherwise `null`: a reference that is kept as written.
+ */
+function characterOf(decimal: string | undefined, hex: string | undefined): number | null {
+  const codePoint =
+    decimal !== undefined ? codePointOf(decimal, 10) : codePointOf(hex ?? "", 16);
+  return codePoint !== null && isXmlChar(codePoint) ? codePoint : null;
+}
+
 export function decodeHTMLEntities(text: string): string {
   return text.replace(
     REFERENCE,
     (reference: string, decimal?: string, hex?: string, entity?: string): string => {
       if (entity !== undefined) return PREDEFINED_ENTITIES.get(entity) ?? reference;
-      const codePoint =
-        decimal !== undefined ? codePointOf(decimal, 10) : codePointOf(hex ?? "", 16);
-      return codePoint !== null && isXmlChar(codePoint)
-        ? String.fromCodePoint(codePoint)
-        : reference;
+      const codePoint = characterOf(decimal, hex);
+      return codePoint !== null ? String.fromCodePoint(codePoint) : reference;
     },
   );
+}
+
+/**
+ * Whether `text` holds a character reference whose value is not an XML `Char`,
+ * one that `decodeHTMLEntities` keeps as written. `text` is read with the same
+ * pattern, left to right, so text that another reference produces is never
+ * taken for one: `&amp;#0;` holds no such reference, although it decodes to the
+ * text `&#0;`.
+ */
+export function hasNonCharacterReference(text: string): boolean {
+  for (const [, decimal, hex, entity] of text.matchAll(REFERENCE)) {
+    if (entity === undefined && characterOf(decimal, hex) === null) return true;
+  }
+  return false;
 }

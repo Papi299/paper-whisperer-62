@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { decodeHTMLEntities } from "../htmlEntities";
+import { decodeHTMLEntities, hasNonCharacterReference } from "../htmlEntities";
 import { extractPubMedArticleDoi } from "../pubmedArticleIdentifiers";
 import { articleId, efetchDocument, pubmedArticle } from "./fixtures/pubmedEfetchXml";
 import { DECODE_VECTORS } from "./fixtures/xmlTextVectors";
@@ -95,10 +95,71 @@ describe("decodeHTMLEntities — values that are not XML characters", () => {
   });
 });
 
+describe("hasNonCharacterReference: exactly the references the decoder keeps as written (001C)", () => {
+  const values = [
+    0, 1, 8, 9, 10, 11, 12, 13, 14, 0x1f, 0x20, 0x7f, 0xd7ff, 0xd800, 0xdbff, 0xdc00, 0xdfff, 0xe000, 0xfffd, 0xfffe,
+    0xffff, 0x10000, 0x1d400, 0x10fffd, 0x10ffff, 0x110000, 0x7fffffff, 2 ** 53, 1e21,
+  ];
+  const spellings = (value: number): string[] => {
+    const decimal = BigInt(value).toString(10);
+    const hex = BigInt(value).toString(16);
+    return [`&#${decimal};`, `&#0000${decimal};`, `&#x${hex};`, `&#x${hex.toUpperCase()};`, `&#x0000${hex};`];
+  };
+
+  it.each(values)("%s: each spelling is flagged exactly when the value is not a Char", (value) => {
+    for (const reference of spellings(value)) {
+      expect(hasNonCharacterReference(reference)).toBe(!isXmlChar(value));
+      expect(hasNonCharacterReference(`10.1000/a${reference}b`)).toBe(!isXmlChar(value));
+      // The decoder's own rule: flagged exactly when it is kept as written.
+      expect(hasNonCharacterReference(reference)).toBe(decodeHTMLEntities(reference) === reference);
+    }
+  });
+
+  it("flags a long run of significant digits, and not a long run of leading zeros", () => {
+    expect(hasNonCharacterReference(`&#${"9".repeat(100_000)};`)).toBe(true);
+    expect(hasNonCharacterReference(`&#x${"F".repeat(100_000)};`)).toBe(true);
+    expect(hasNonCharacterReference(`&#${"0".repeat(100_000)};`)).toBe(true);
+    expect(hasNonCharacterReference(`&#${"0".repeat(100_000)}65;`)).toBe(false);
+    expect(hasNonCharacterReference(`&#x${"0".repeat(100_000)}41;`)).toBe(false);
+  });
+
+  it("never takes reference-looking text that another reference produces for a reference", () => {
+    for (const text of ["&amp;#x110000;", "&amp;#0;", "&#38;#x110000;", "&#x26;#0;", "&amp;amp;#xD800;", "&#38;#xDC00;"]) {
+      expect(hasNonCharacterReference(text)).toBe(false);
+    }
+  });
+
+  it("does not flag entities, or text that is not a character reference at all", () => {
+    for (const text of [
+      "",
+      "10.1000/plain",
+      "&amp;&lt;&gt;&quot;&apos;",
+      "&nbsp;&alpha;",
+      // XML's hexadecimal form takes a lowercase x, so this is not a reference.
+      "&#X110000;",
+      "&#x110000",
+      "&#0",
+      "&#;",
+      "&#x;",
+      "&",
+      "#x110000;",
+    ]) {
+      expect(hasNonCharacterReference(text)).toBe(false);
+    }
+  });
+
+  it("finds one such reference among valid ones, wherever it is", () => {
+    expect(hasNonCharacterReference("&#65;&amp;&#x110000;&lt;")).toBe(true);
+    expect(hasNonCharacterReference("&#xD835;&#xDC00;")).toBe(true);
+    expect(hasNonCharacterReference("&#x1D400;&#65;&amp;")).toBe(false);
+  });
+});
+
 describe("the article DOI, read through the shared decoder", () => {
-  // `pubmedArticleIdentifiers.ts` is unchanged; it decodes each DOI value with
-  // this decoder, so the decoder's contract reaches the DOI. Its own suite
-  // still covers its selection rules.
+  // `pubmedArticleIdentifiers.ts` decodes each DOI value with this decoder, so
+  // the decoder's contract reaches the DOI, except that since 001C a DOI
+  // holding a reference to no character is not used at all. Its own suite
+  // covers its selection rules.
   const own = (value: string) =>
     extractPubMedArticleDoi(efetchDocument(pubmedArticle({ ownIds: [articleId("doi", value)] })));
 
@@ -116,11 +177,12 @@ describe("the article DOI, read through the shared decoder", () => {
     expect(own("10.1000/a&amp;lt;b")).toBe("10.1000/a&lt;b");
   });
 
-  it("keeps a reference to a non-character as text instead of failing", () => {
-    // The old decoder threw RangeError here, which lost the whole record.
-    expect(own("10.1000/q2&#x110000;")).toBe("10.1000/q2&#x110000;");
-    expect(own("10.1000/q2&#0;")).toBe("10.1000/q2&#0;");
-    // The well-formed, doubly escaped spelling already produced this text.
+  it("does not take a DOI holding a reference to no character, and does not fail on it", () => {
+    // The old decoder threw RangeError here, which lost the whole record. Kept
+    // as written (Q2), the text equalled the well-formed spelling's below.
+    expect(own("10.1000/q2&#x110000;")).toBeNull();
+    expect(own("10.1000/q2&#0;")).toBeNull();
+    // The well-formed, doubly escaped spelling states this literal DOI name.
     expect(own("10.1000/q2&amp;#x110000;")).toBe("10.1000/q2&#x110000;");
   });
 });
