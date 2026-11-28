@@ -52,6 +52,20 @@ describe("collective author names", () => {
     expect(author_provenance![0].source_name).toBe(text);
   });
 
+  // CODEQL-EDGE-TEXT-EXTRACTION-001B: the lexer now writes these references as
+  // text or as `&amp;`. Decoded here, at the Edge, they read exactly as before.
+  it.each([
+    ["a hexadecimal & before a decimal reference", "Unit &#x26;#60;5 Group", "Unit &#60;5 Group"],
+    ["a decimal & before amp", "R&#38;amp;D Group", "R&amp;D Group"],
+    ["U+0000 and a lone surrogate", "Group &#0; and &#xD800;", "Group &#0; and &#xD800;"],
+    ["surrogate pair references", "Group &#xD835;&#xDC00; West", "Group &#xD835;&#xDC00; West"],
+    ["a pair across removed markup", "Group &#xD835;<i></i>&#xDC00; East", "Group &#xD835;&#xDC00; East"],
+  ])("%s (decoded as before)", (_name, source, text) => {
+    const { authors, author_provenance } = extractPubMedAuthors(record(collective(source)));
+    expect(authors).toEqual([text]);
+    expect(author_provenance![0].collective_name).toBe(text);
+  });
+
   it("a collective name that is only markup still yields no author", () => {
     const { authors, author_provenance } = extractPubMedAuthors(record(collective("<i></i>") + personal()));
     expect(authors).toEqual(["Jane Doe"]);

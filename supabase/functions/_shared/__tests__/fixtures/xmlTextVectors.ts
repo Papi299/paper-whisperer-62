@@ -86,9 +86,9 @@ export interface CharacterDataVector {
 export const CHARACTER_DATA_VECTORS: CharacterDataVector[] = [
   { name: "plain text", input: "Plain text", expected: "Plain text" },
   {
-    name: "references are copied as written",
+    name: "references are copied as written, except one that names no character",
     input: "A &amp; B &lt; C &#x3B1; &#945; &nbsp; &#x110000;",
-    expected: "A &amp; B &lt; C &#x3B1; &#945; &nbsp; &#x110000;",
+    expected: "A &amp; B &lt; C &#x3B1; &#945; &nbsp; &amp;#x110000;",
   },
   { name: "inline markup", input: "Growth of <i>E. coli</i> in CO<sub>2</sub>-rich media", expected: "Growth of E. coli in CO2-rich media" },
   { name: "nested markup", input: "<b><i>bold italic</i></b> and <sup><i>x</i></sup>", expected: "bold italic and x" },
@@ -159,6 +159,56 @@ export const CHARACTER_DATA_VECTORS: CharacterDataVector[] = [
   { name: "boundaries match the local name", input: "<p>a</p><x:p>b</x:p>", boundaries: ["p"], expected: "a b" },
   { name: "one space for several boundaries", input: "<jats:sec><jats:title>A</jats:title></jats:sec><jats:sec><jats:p>B</jats:p></jats:sec>", boundaries: ["sec", "title", "p"], expected: "A B" },
   { name: "a boundary before escaped text", input: "<jats:p>A</jats:p><jats:p><![CDATA[<b]]></jats:p>", boundaries: ["p"], expected: "A &lt;b" },
+];
+
+/**
+ * `xmlCharacterData`: the character references written as text or as `&amp;`
+ * (CODEQL-EDGE-TEXT-EXTRACTION-001B), so that every decoder reads the output
+ * alike. Decoding each expected value once gives what decoding the reference
+ * as written gave: the references kept as text decode to themselves, and
+ * `&amp;` decodes as `&#x26;` does.
+ */
+export const DECODER_NEUTRAL_VECTORS: CharacterDataVector[] = [
+  // U+0000 and values above U+10FFFF: the `&` is escaped.
+  { name: "above U+10FFFF, hexadecimal and decimal", input: "invalid &#x110000; and &#1114112;", expected: "invalid &amp;#x110000; and &amp;#1114112;" },
+  { name: "twenty decimal digits", input: "a&#99999999999999999999;b", expected: "a&amp;#99999999999999999999;b" },
+  { name: "a thousand hex digits", input: `&#x${"F".repeat(1000)};`, expected: `&amp;#x${"F".repeat(1000)};` },
+  { name: "leading zeros keep a value small", input: "&#x0000000041; &#00000065; &#x0000110000;", expected: "&#x0000000041; &#00000065; &amp;#x0000110000;" },
+  { name: "U+0000 in each spelling", input: "a&#0;b&#x0;c&#x0000;d&#000;", expected: "a&amp;#0;b&amp;#x0;c&amp;#x0000;d&amp;#000;" },
+  { name: "the largest code point is copied, the next is not", input: "&#x10FFFF;&#1114111;&#x110000;", expected: "&#x10FFFF;&#1114111;&amp;#x110000;" },
+  { name: "valid references beside invalid ones", input: "&#x3B1;&#x110000;&amp;&#0;&lt;&#177;", expected: "&#x3B1;&amp;#x110000;&amp;&amp;#0;&lt;&#177;" },
+  { name: "a stray & and < with an invalid reference", input: "AT&T and p < 0.05; invalid &#x110000;", expected: "AT&amp;T and p &lt; 0.05; invalid &amp;#x110000;" },
+  { name: "an already escaped reference is unchanged", input: "&amp;#x110000; &amp;#0;", expected: "&amp;#x110000; &amp;#0;" },
+  { name: "CDATA text that looks like an invalid reference", input: "<![CDATA[&#x110000;]]>", expected: "&amp;#x110000;" },
+  // A reference to "&" itself: written &amp;.
+  { name: "every spelling of a reference to &", input: "AT&#38;T R&#x26;D &#x0026; &#038;", expected: "AT&amp;T R&amp;D &amp; &amp;" },
+  { name: "a hexadecimal & before a decimal reference", input: "&#x26;#60; and &#x26;#1114112;", expected: "&amp;#60; and &amp;#1114112;" },
+  { name: "a decimal & before amp", input: "&#38;amp;", expected: "&amp;amp;" },
+  { name: "other references to punctuation are copied", input: "&#x23;&#59;&#x3C;&#60;", expected: "&#x23;&#59;&#x3C;&#60;" },
+  // Surrogate code points: kept only as one half of a pair.
+  { name: "surrogate pairs stay as written", input: "&#xD835;&#xDC00; &#55349;&#56320; &#xD835;&#56320;", expected: "&#xD835;&#xDC00; &#55349;&#56320; &#xD835;&#56320;" },
+  { name: "a pair across markup the output does not show", input: "&#xD835;<i></i>&#xDC00; &#xD835;<!-- c -->&#xDC01;", expected: "&#xD835;&#xDC00; &#xD835;&#xDC01;" },
+  { name: "an empty CDATA section does not separate a pair", input: "&#xD835;<![CDATA[]]>&#xDC00;", expected: "&#xD835;&#xDC00;" },
+  { name: "lone halves are text", input: "&#xD835; and &#xDC00; and &#55296;", expected: "&amp;#xD835; and &amp;#xDC00; and &amp;#55296;" },
+  { name: "a high half followed by something else", input: "&#xD835;x&#xDC00; &#xD835;&#x41;", expected: "&amp;#xD835;x&amp;#xDC00; &amp;#xD835;&#x41;" },
+  { name: "two high halves, then a low half", input: "&#xD835;&#xD835;&#xDC00;", expected: "&amp;#xD835;&#xD835;&#xDC00;" },
+  { name: "a high half, then two low halves", input: "&#xD835;&#xDC00;&#xDC00;", expected: "&#xD835;&#xDC00;&amp;#xDC00;" },
+  { name: "a low half before a high half", input: "&#xDC00;&#xD835;", expected: "&amp;#xDC00;&amp;#xD835;" },
+  { name: "a high half at the end", input: "x&#xD835;", expected: "x&amp;#xD835;" },
+  { name: "a high half before escaped text", input: "&#xD835;<![CDATA[a]]>&#xD835;&amp;&#xD835;<5", expected: "&amp;#xD835;a&amp;#xD835;&amp;&amp;#xD835;&lt;5" },
+  { name: "a high half before an invalid reference or a reference to &", input: "&#xD835;&#x110000; &#xD835;&#x26;", expected: "&amp;#xD835;&amp;#x110000; &amp;#xD835;&amp;" },
+  {
+    name: "a word boundary separates a pair",
+    input: "<jats:p>&#xD835;</jats:p><jats:p>&#xDC00;</jats:p>",
+    boundaries: ["p"],
+    expected: "&amp;#xD835; &amp;#xDC00;",
+  },
+  {
+    name: "a word boundary before a pair keeps it whole",
+    input: "<jats:p>A</jats:p><jats:p>&#xD835;&#xDC00;</jats:p>",
+    boundaries: ["p"],
+    expected: "A &#xD835;&#xDC00;",
+  },
 ];
 
 export interface ElementVector {

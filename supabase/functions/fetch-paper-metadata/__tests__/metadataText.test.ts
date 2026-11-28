@@ -178,7 +178,7 @@ describe("Crossref abstract", () => {
       "<jats:p>Line one<jats:break/>line two</jats:p><jats:list><jats:list-item><jats:p>First</jats:p></jats:list-item><jats:list-item><jats:p>Second</jats:p></jats:list-item></jats:list>",
       "Line one line two First Second",
     ],
-    ["references stay as written, including invalid ones", "<jats:p>bad &#x110000; ref and A &amp; B</jats:p>", "bad &#x110000; ref and A &amp; B"],
+    ["references stay as written; one that names no character is written as text", "<jats:p>bad &#x110000; ref and A &amp; B</jats:p>", "bad &amp;#x110000; ref and A &amp; B"],
     ["surrounding white space is trimmed", "\n  <jats:p> Text </jats:p>\n", "Text"],
   ])("%s", (_name, source, expected) => {
     expect(crossrefAbstract(source)).toBe(expected);

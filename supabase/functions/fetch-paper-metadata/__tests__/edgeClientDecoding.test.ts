@@ -20,6 +20,12 @@ import { normalizeAuthorProvenanceForStorage } from "../../../../src/lib/authorP
  * `Literal <`, and on one reference above U+10FFFF it left the whole field
  * escaped, so `AT&T and p < 0.05` was stored as `AT&amp;T and p &lt; 0.05`.
  *
+ * Revision 001B changed one thing in the Edge representation below: a
+ * character reference that names no character (`&#x110000;` here) comes back
+ * with its `&` escaped, so a tab still running the previous client decoder
+ * reads it as text instead of giving up on the field
+ * (`staleClientCompatibility.test.ts`). The stored text is unchanged.
+ *
  * Every case runs the real Edge adapter and the real client normalization.
  * Expected text is written by hand.
  */
@@ -69,28 +75,28 @@ describe("the reviewed blocker, Examples A to D", () => {
       "A: a stray & and < with an invalid reference",
       "PubMed title",
       "AT&T and p < 0.05; invalid &#x110000;",
-      "AT&amp;T and p &lt; 0.05; invalid &#x110000;",
+      "AT&amp;T and p &lt; 0.05; invalid &amp;#x110000;",
       "AT&T and p < 0.05; invalid &#x110000;",
     ],
     [
       "A, in an abstract",
       "PubMed abstract",
       "AT&T and p < 0.05; invalid &#x110000;",
-      "AT&amp;T and p &lt; 0.05; invalid &#x110000;",
+      "AT&amp;T and p &lt; 0.05; invalid &amp;#x110000;",
       "AT&T and p < 0.05; invalid &#x110000;",
     ],
     [
       "A, in a Crossref abstract",
       "Crossref abstract",
       "<jats:p>AT&T and p < 0.05; invalid &#x110000;</jats:p>",
-      "AT&amp;T and p &lt; 0.05; invalid &#x110000;",
+      "AT&amp;T and p &lt; 0.05; invalid &amp;#x110000;",
       "AT&T and p < 0.05; invalid &#x110000;",
     ],
     [
       "A, written as well-formed XML",
       "PubMed title",
       "AT&amp;T and p &lt; 0.05; invalid &#x110000;",
-      "AT&amp;T and p &lt; 0.05; invalid &#x110000;",
+      "AT&amp;T and p &lt; 0.05; invalid &amp;#x110000;",
       "AT&T and p < 0.05; invalid &#x110000;",
     ],
     ["B: CDATA text that looks like a reference", "PubMed title", "<![CDATA[Literal &lt;]]>", "Literal &amp;lt;", "Literal &lt;"],
@@ -100,14 +106,14 @@ describe("the reviewed blocker, Examples A to D", () => {
       "C: a malformed reference among valid ones",
       "PubMed title",
       "A &amp; B &#x110000; C &lt; D",
-      "A &amp; B &#x110000; C &lt; D",
+      "A &amp; B &amp;#x110000; C &lt; D",
       "A & B &#x110000; C < D",
     ],
     [
       "C, in a Crossref abstract",
       "Crossref abstract",
       "<jats:p>A &amp; B &#x110000; C &lt; D</jats:p>",
-      "A &amp; B &#x110000; C &lt; D",
+      "A &amp; B &amp;#x110000; C &lt; D",
       "A & B &#x110000; C < D",
     ],
     ["D: one decoding of &amp;lt;", "PubMed title", "Value &amp;lt; text", "Value &amp;lt; text", "Value &lt; text"],

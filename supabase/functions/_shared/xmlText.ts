@@ -42,7 +42,9 @@
  * removed, in XML's escaped form:
  *
  *  - a reference that is complete (`&amp;`, `&#x3B1;`, `&nbsp;`) is copied as
- *    written; deciding what it means belongs to the decoding stage;
+ *    written; deciding what it means belongs to the decoding stage. The
+ *    exception is the few character references described below, which no
+ *    decoder is left to interpret;
  *  - a CDATA section's text is escaped — `&`, `<` and `>` become `&amp;`,
  *    `&lt;` and `&gt;`, which is how Canonical XML writes a CDATA section's
  *    character content — so decoding yields its literal text and nothing inside
@@ -59,6 +61,35 @@
  * Who decodes, and when, is the caller's decision — see `fetch-paper-metadata`
  * and `pubmedAuthors.ts`. This module never decodes.
  *
+ * ## Character references every decoder must read alike
+ *
+ * The title and abstract are decoded in the browser, and a tab opened before a
+ * release keeps the decoder it loaded. The one served before PR #377 ran eight
+ * replacements in sequence — hexadecimal references first, then decimal ones,
+ * each pass reading the previous pass's output — and when `String.fromCodePoint`
+ * threw it gave up on the whole field and stored it still escaped
+ * (CODEQL-EDGE-TEXT-EXTRACTION-001B). So the output never depends on how a
+ * decoder treats a character reference that names no character it can return:
+ *
+ *  - a reference to U+0000 or to a value above U+10FFFF (`&#x110000;`, a
+ *    twenty-digit reference) is written as the text it is: its `&` is escaped,
+ *    as for an incomplete reference, so it decodes to itself;
+ *  - so is a reference to a surrogate code point, unless it is one half of a
+ *    pair: a high surrogate's reference followed directly, in the output, by a
+ *    low surrogate's, which a decoder combines into one character. A tag the
+ *    output does not show (`<i>`, a comment) does not separate the two halves;
+ *    a word boundary does;
+ *  - a reference to `&` itself (`&#38;`, `&#x26;`) is written `&amp;`, so that
+ *    a decoder that reads hexadecimal references before decimal ones cannot
+ *    turn it into the start of another reference.
+ *
+ * Both decoders that read this output — the client's and this function's own
+ * (`htmlEntities.ts`, for author fields) — keep those references as text and
+ * read `&#x26;` and `&amp;` alike, so decoding the output once yields exactly
+ * the text it yielded before; only a decoder that would have thrown or cascaded
+ * on them reads something different, and that is now plain text. Every other
+ * character reference is copied as written.
+ *
  * ## Words across tags
  *
  * Removing a tag inserts nothing, so `CO<sub>2</sub>` stays `CO2`. A caller may
@@ -72,9 +103,11 @@
  * first character that cannot continue it — at the latest at the next `<`, since
  * no name, white space or attribute value may contain one — and searches for
  * `-->`, `]]>` and `?>` are remembered, so no part of the input is scanned more
- * than a constant number of times. No recursion and no backtracking pattern;
- * output is collected in an array and joined once. The work is linear in the
- * input.
+ * than a constant number of times. A character reference's value is read once
+ * more, digit by digit, and reading stops as soon as it passes U+10FFFF. No
+ * recursion and no backtracking pattern; output is collected in an array and
+ * joined once, and the only part ever rewritten is a high surrogate's reference
+ * whose low half did not follow. The work is linear in the input.
  */
 
 const LT = 0x3c;
@@ -89,6 +122,7 @@ const BANG = 0x21;
 const SEMICOLON = 0x3b;
 const HASH = 0x23;
 const LOWER_X = 0x78;
+const MAX_CODE_POINT = 0x10ffff;
 
 /** XML 1.0 [3] `S`. */
 function isXmlSpace(code: number): boolean {
@@ -292,6 +326,48 @@ function referenceEnd(s: string, start: number): number {
   return stop > i && s.charCodeAt(stop) === SEMICOLON ? stop + 1 : -1;
 }
 
+/** The value of one digit that `referenceEnd` admitted. */
+function digitValue(code: number): number {
+  if (code <= 0x39) return code - 0x30; // 0-9
+  if (code >= 0x61) return code - 0x57; // a-f
+  return code - 0x37; // A-F
+}
+
+/**
+ * The value of the complete character reference spanning `[start, end)`,
+ * `Infinity` once it passes U+10FFFF, or `-1` for an entity reference. Digits
+ * are read one at a time and reading stops above U+10FFFF, so the value never
+ * grows with the length of the reference; leading zeros keep it small.
+ */
+function characterReferenceValue(s: string, start: number, end: number): number {
+  if (s.charCodeAt(start + 1) !== HASH) return -1;
+  const hex = s.charCodeAt(start + 2) === LOWER_X;
+  const radix = hex ? 16 : 10;
+  let value = 0;
+  for (let i = start + (hex ? 3 : 2); i < end - 1; i++) {
+    value = value * radix + digitValue(s.charCodeAt(i));
+    if (value > MAX_CODE_POINT) return Number.POSITIVE_INFINITY;
+  }
+  return value;
+}
+
+function isHighSurrogate(value: number): boolean {
+  return value >= 0xd800 && value <= 0xdbff;
+}
+
+function isLowSurrogate(value: number): boolean {
+  return value >= 0xdc00 && value <= 0xdfff;
+}
+
+/**
+ * Whether a character reference with this value is copied as written. The
+ * others are written by `xmlCharacterData` itself; see "Character references
+ * every decoder must read alike" above.
+ */
+function isCopiedAsWritten(value: number): boolean {
+  return value > 0 && value <= MAX_CODE_POINT && value !== AMP && !isHighSurrogate(value) && !isLowSurrogate(value);
+}
+
 const ESCAPES: Readonly<Record<string, string>> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
 
 /** Literal text in escaped form, as Canonical XML writes a CDATA section's content. */
@@ -323,9 +399,21 @@ export function xmlCharacterData(source: string, options: XmlCharacterDataOption
   const parts: string[] = [];
   let lastCode = -1;
   let boundaryPending = false;
+  // The index in `parts` of a high surrogate's reference that nothing has
+  // followed yet, so its low half may still come; -1 when there is none.
+  let pendingHigh = -1;
+
+  /** The pending high half was not followed by its low half: it is text. */
+  const settleHigh = (): void => {
+    if (pendingHigh !== -1) {
+      parts[pendingHigh] = `&amp;${parts[pendingHigh].slice(1)}`;
+      pendingHigh = -1;
+    }
+  };
 
   const emit = (text: string): void => {
     if (text.length === 0) return;
+    settleHigh();
     if (boundaryPending) {
       if (lastCode !== -1 && !isWhiteSpace(lastCode) && !isWhiteSpace(text.charCodeAt(0))) {
         parts.push(" ");
@@ -334,6 +422,23 @@ export function xmlCharacterData(source: string, options: XmlCharacterDataOption
     }
     parts.push(text);
     lastCode = text.charCodeAt(text.length - 1);
+  };
+
+  /** A complete character reference that `isCopiedAsWritten` rejects. */
+  const writeReference = (reference: string, value: number): void => {
+    if (value === AMP) {
+      emit("&amp;");
+    } else if (isLowSurrogate(value) && pendingHigh !== -1 && !boundaryPending) {
+      // Directly after its high half: the pair stays as written.
+      parts.push(reference);
+      lastCode = SEMICOLON;
+      pendingHigh = -1;
+    } else if (isHighSurrogate(value)) {
+      emit(reference);
+      pendingHigh = parts.length - 1;
+    } else {
+      emit(`&amp;${reference.slice(1)}`);
+    }
   };
 
   let textStart = 0;
@@ -360,6 +465,12 @@ export function xmlCharacterData(source: string, options: XmlCharacterDataOption
         i++;
         textStart = i;
       } else {
+        const value = characterReferenceValue(source, i, end);
+        if (value !== -1 && !isCopiedAsWritten(value)) {
+          emit(source.slice(textStart, i));
+          writeReference(source.slice(i, end), value);
+          textStart = end;
+        }
         i = end;
       }
     } else {
@@ -367,6 +478,7 @@ export function xmlCharacterData(source: string, options: XmlCharacterDataOption
     }
   }
   emit(source.slice(textStart));
+  settleHigh();
   return parts.join("");
 }
 
