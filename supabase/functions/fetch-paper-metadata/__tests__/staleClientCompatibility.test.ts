@@ -1,18 +1,25 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { crossrefAbstract, pubmedAbstract, pubmedArticleTitle } from "../metadataText";
 import { efetchDocument, pubmedArticle } from "../../_shared/__tests__/fixtures/pubmedEfetchXml";
 import { decodeHTMLEntities as currentClient } from "../../../../src/lib/decodeHTMLEntities";
 import { normalizePaperData, type RawPaperData } from "../../../../src/lib/normalizePaperData";
 import { specDecode } from "../../../../src/lib/__tests__/fixtures/clientEntitySpec";
-import { decodeHTMLEntities as staleClient } from "./fixtures/staleClientDecoder";
 
 /**
  * Release state C (PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001B): the corrected
  * Edge Function is deployed while a browser tab opened before the Vercel
- * release still runs the client decoder it loaded — main's, copied byte for
- * byte in `fixtures/staleClientDecoder.ts`. Nothing makes that tab reload, and
- * what it stores stays stored.
+ * release still runs the client decoder it loaded. Nothing makes that tab
+ * reload, and what it stores stays stored.
+ *
+ * That decoder is `src/lib/decodeHTMLEntities.ts` as main served it, kept byte
+ * for byte in `fixtures/staleClientDecoder.main.ts.txt`. It is data, not a
+ * source file, because it is the defective decoder CodeQL alert 6 reports
+ * (`js/double-escaping`), and nothing may import it. This suite checks its git
+ * blob hash, compiles it with TypeScript and runs it.
  *
  * Independent review of revision 001A found that this state stored
  * `AT&T and p < 0.05; invalid &#x110000;` as
@@ -32,9 +39,43 @@ import { decodeHTMLEntities as staleClient } from "./fixtures/staleClientDecoder
  * in place. Expected text is written by hand.
  */
 
+type Decoder = (text: string | null | undefined) => string | null;
+
+/** main's `src/lib/decodeHTMLEntities.ts`, the blob the fixture must equal. */
+const STALE_DECODER_BLOB = "d2d9b39e9f7b6da6baa262853931afdc344bf9db";
+const staleSource = readFileSync(new URL("./fixtures/staleClientDecoder.main.ts.txt", import.meta.url));
+
+/** Git's object id for a blob: SHA-1 of "blob <size>", a NUL byte, then the bytes. */
+const gitBlobId = (bytes: Buffer): string =>
+  createHash("sha1").update(`blob ${bytes.length}${String.fromCharCode(0)}`).update(bytes).digest("hex");
+
+function compileStaleDecoder(source: string): Decoder {
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  });
+  const module = { exports: {} as { decodeHTMLEntities?: Decoder } };
+  new Function("module", "exports", outputText)(module, module.exports);
+  if (typeof module.exports.decodeHTMLEntities !== "function") throw new Error("the fixture exports no decodeHTMLEntities");
+  return module.exports.decodeHTMLEntities;
+}
+
+const staleClient = compileStaleDecoder(staleSource.toString("utf8"));
+
 const C = (...codePoints: number[]) => String.fromCodePoint(...codePoints);
 const CONFIG = { synonymLookup: {}, poolStudyTypes: [], poolKeywords: [], synonymGroups: [] };
 const DECODER_MODULE = "../../../../src/lib/decodeHTMLEntities";
+
+describe("the stale tab's decoder", () => {
+  it("is main's client decoder, byte for byte", () => {
+    expect(gitBlobId(staleSource)).toBe(STALE_DECODER_BLOB);
+  });
+
+  it("behaves as main's decoder did: a cascade, and a whole-field fallback", () => {
+    expect(staleClient("Value &amp;lt; text")).toBe("Value < text");
+    expect(staleClient("AT&amp;T &#x110000;")).toBe("AT&amp;T &#x110000;");
+    expect(staleClient(null)).toBeNull();
+  });
+});
 
 let staleNormalize: typeof normalizePaperData;
 
@@ -235,5 +276,6 @@ describe("generated fields: what the Edge sends reads alike in both decoders", (
       expect(hasUnpairedSurrogate(stale ?? ""), content).toBe(false);
       if (!OLD_NAMED_CASCADE.test(edge)) expect(stale, content).toBe(current);
     }
-  });
+    // 4,000 contents take well under a second; the allowance is for a loaded runner.
+  }, 20_000);
 });
