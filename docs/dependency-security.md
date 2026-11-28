@@ -1964,7 +1964,7 @@ Once decoded, the two are the same string, and `doiNamesAreEquivalent` sees only
 - **The paper is kept.** `fetchFromPubMed` drops a record only when it has no title. A rejected DOI makes `doi` and `journal_url` `null`; the PMID, title, authors, abstract, keywords and the rest are read as before. The client stores the paper under its PMID, with no DOI.
 - **Several own DOIs.** One malformed value makes the record's own DOI evidence unusable. The result is no DOI, even beside a valid entry, rather than a choice among entries of which one is not a DOI name. Among well-formed values the existing rules hold: equivalent spellings keep the first, and conflicting ones give none.
 - **Only the article's own DOI entries are judged.** A malformed PII, or a malformed DOI of a cited work, changes nothing.
-- **The DOI lookup.** A record without a DOI is `missing` (these records were `mismatch` under 001B), so it never answers a DOI request and never enriches a Crossref record. The lookup falls back to Crossref, whose DOI arrives as JSON and is never decoded. The bounded warning `doi_pubmed_match=missing` replaces `mismatch` for such records.
+- **The DOI lookup.** A record without a DOI is `missing`, so it never answers a DOI request and never enriches a Crossref record. Under 001B the same record was a `match` for the literal DOI its text equalled, which is the collision, and a `mismatch` for any other request. The lookup falls back to Crossref, whose DOI arrives as JSON and is never decoded. For such records the bounded warning is now `doi_pubmed_match=missing`.
 - **Nothing stored changes.** The Edge does not write to the database, and `safe_bulk_insert_papers` only inserts: a duplicate is reported, not updated. A paper stored earlier keeps its DOI.
 
 **Not repaired, not guessed at.** `&amp;lt;` stays the literal `&lt;`, as under 001B, and nothing tries to work out whether a provider meant `<`.
@@ -2213,7 +2213,7 @@ None of the limitations affects the merge, for the reason above.
   **Changed expectations.** Each one asserted the DOI of a malformed own DOI:
   - in `htmlEntities.test.ts`, the out-of-range and NUL rows;
   - in `edgeClientDecoding.test.ts`, the invalid-reference row;
-  - in `identifierQualification.test.ts`, the four malformed rows, now no DOI, and two match rows, now `missing` instead of `mismatch`.
+  - in `identifierQualification.test.ts`, the four malformed rows, now no DOI, and two match rows, now `missing` instead of `mismatch`. The collision itself was a `match`; the new tests cover it.
 
   The extended test adds a malformed entry to the several-own-DOIs check. No other expectation changed.
 - **Failing before, passing after.** With 001B's `pubmedArticleIdentifiers.ts` put back, 35 of the 4,489 focused tests fail: the 27 new tests of the rule and the 8 changed ones. With 001C, none fails.
