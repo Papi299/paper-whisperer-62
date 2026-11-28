@@ -7,7 +7,7 @@
 - This document owns the **current dependency-security posture** and the **remediation policy**. When an audit result or a remediation boundary changes, fix this file.
 - It is **not** a chronology. Per-cluster implementation detail belongs to the merged PRs listed below.
 - Supabase/Postgres security (RLS, RPC grants, Auth advisors) is a separate concern owned by [decisions-and-triggers.md](decisions-and-triggers.md) and [pfa-c03-staging-and-security-test-plan.md](pfa-c03-staging-and-security-test-plan.md). Dependency remediation has never changed schema, RLS, migrations, or Supabase Production.
-- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1 merged that evening as `ded56c63`. CodeQL's analysis of that commit closed alerts 7 and 9–15 and left 10 open, and 10 were still open on 2026-11-25. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness), whose fix merged on 2026-11-25 as `a9c40ea6`. CodeQL's analysis of that commit reported the same 10 open alerts, and 10 were still open on 2026-11-27. So is [RIS record integrity](#ris-record-integrity), whose fix merged on 2026-11-27 as `4c454769`; CodeQL's analysis of that commit again reported 10 open alerts. Repair group Q2, [Edge metadata text extraction](#edge-metadata-text-extraction-codeql-q2), is proposed in Draft PR #377: not merged, and not deployed to Supabase. Independent review sent it back because the Edge text it returns met a defect in the client's entity decoder; the revision corrects that decoder too, the one CodeQL alert 6 points at.
+- GitHub code-scanning (CodeQL) alerts concern first-party code, not dependencies, and this document does not count them. On 2026-11-23, 18 were open on `main`. A read-only triage classified all 18 that day; its outcome is recorded under [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23). On `main` `cec11199` on 2026-11-24, 18 were still open, and on `main` `a110b4ce` later that day still 18. The [BibTeX codec](#bibtex-codec-and-record-integrity-codeql-q1) work for repair group Q1 merged that evening as `ded56c63`. CodeQL's analysis of that commit closed alerts 7 and 9–15 and left 10 open, and 10 were still open on 2026-11-25. The first-party [CSV formula injection](#csv-formula-injection-cwe-1236) finding is recorded here too, although no CodeQL rule reports it. So is [BibTeX citation-key uniqueness](#bibtex-citation-key-uniqueness), whose fix merged on 2026-11-25 as `a9c40ea6`. CodeQL's analysis of that commit reported the same 10 open alerts, and 10 were still open on 2026-11-27. So is [RIS record integrity](#ris-record-integrity), whose fix merged on 2026-11-27 as `4c454769`; CodeQL's analysis of that commit again reported 10 open alerts. Repair group Q2, [Edge metadata text extraction](#edge-metadata-text-extraction-codeql-q2), is proposed in Draft PR #377: not merged, and not deployed to Supabase. Independent review sent it back because the Edge text it returns met a defect in the client's entity decoder; the revision corrects that decoder too, the one CodeQL alert 6 points at. A second review asked that browser tabs still running the old decoder read the Edge text correctly as well, that the identifier claims be qualified, and that the deployed function be read; revision 001B does all three.
 
 ## Current audit state
 
@@ -1628,10 +1628,10 @@ Each item is separate work, and none of it is part of this change:
 
 ## Edge metadata text extraction (CodeQL Q2)
 
-**Status: fix proposed in Draft PR #377, revised after independent review; not merged, and not deployed to Supabase.** `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001` implements repair group Q2 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23) on base `main` `4c454769` and is rated P3. Review returned it with the verdict `PAPERLUME_CODEQL_EDGE_TEXT_EXTRACTION_REVISION_REQUIRED`: the Edge work was approved, but its escaped text met two defects of the client's entity decoder. The revision, `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001A`, corrects that decoder under a narrow, authorized client scope exception; see [Independent review: the Edge-to-client boundary](#independent-review-the-edge-to-client-boundary-001a). No dependency changes. The PR now has two parts that reach users separately:
+**Status: fix proposed in Draft PR #377, revised twice after independent review; not merged, and not deployed to Supabase.** `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001` implements repair group Q2 of the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23) on base `main` `4c454769` and is rated P3. Review returned it with the verdict `PAPERLUME_CODEQL_EDGE_TEXT_EXTRACTION_REVISION_REQUIRED`: the Edge work was approved, but its escaped text met two defects of the client's entity decoder. The revision, `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001A`, corrects that decoder under a narrow, authorized client scope exception; see [Independent review: the Edge-to-client boundary](#independent-review-the-edge-to-client-boundary-001a). Review of 001A accepted that decoder and asked for three more things. Revision `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001B` makes the Edge output read the same in a tab still running the old decoder, qualifies the identifier claims, and reads the deployed function; see [Independent review: stale tabs, identifiers and the deployed baseline](#independent-review-stale-tabs-identifiers-and-the-deployed-baseline-001b). No dependency changes. The PR now has two parts that reach users separately:
 
-- **The Edge part** is Supabase Edge Function code. A merge into `main` and the Vercel deployment that follows it do not change what runs. The corrected `fetch-paper-metadata` runs only after a separately authorized Edge Function deploy, and the deployed bundle was not compared with `main` for this work (`DEPLOYED_EDGE_BASELINE_NOT_VERIFIED`). `main` and Production behave as described under [What was wrong in the Edge text](#what-was-wrong-in-the-edge-text) until then.
-- **The client part** is one web module, `src/lib/decodeHTMLEntities.ts`. It reaches Production with the automatic Vercel deployment of a merge, before the Edge part. That order was qualified; see [Release order](#release-order-001a).
+- **The Edge part** is Supabase Edge Function code. A merge into `main` and the Vercel deployment that follows it do not change what runs. The corrected `fetch-paper-metadata` runs only after a separately authorized Edge Function deploy. The deployed function's source was read in revision 001B and is byte-identical to `main`'s (`DEPLOYED_EDGE_BASELINE_VERIFIED_WITH_LIMITATIONS`; see [The deployed Edge baseline](#the-deployed-edge-baseline-001b)). `main` and Production behave as described under [What was wrong in the Edge text](#what-was-wrong-in-the-edge-text) until then.
+- **The client part** is one web module, `src/lib/decodeHTMLEntities.ts`. It reaches Production with the automatic Vercel deployment of a merge, before the Edge part. Since revision 001B, neither order of the two deploys stores worse text than Production; see [Release order (001B)](#release-order-001b).
 
 | Field | Value |
 |---|---|
@@ -1696,13 +1696,13 @@ The list view decodes author strings once more, through a detached `<textarea>` 
 - **`fetch-paper-metadata/metadataText.ts` (new).** It holds the three readings `index.ts` now calls: `pubmedArticleTitle`, `pubmedAbstract` and `crossrefAbstract`. It is pure, so Vitest and Deno import the functions the handler runs. Selection is unchanged: the first `ArticleTitle`; every `AbstractText` in document order, joined with one space, without labels; Crossref's `abstract`, trimmed. Elements are now found with the lexer, so a quoted `>` in a start tag and tags inside comments or CDATA no longer mislead it, and the work stays linear. An empty-element `<AbstractText/>` contributes nothing, which matches what `main` returned for it.
 - **Crossref word boundaries.** Removing an inline tag inserts nothing, so `CO<jats:sub>2</jats:sub>` stays `CO2`. A JATS block element — section, title, label, paragraph, list item, display formula, figure, table, quote, `<break/>` and the like — separates words: one space is written where removing its tag would join two words, and nowhere else. An abstract whose blocks are already separated by white space reads exactly as before.
 
-**Malformed input.** A record that is unusable is still rejected as before, for example one without a title. A usable record with an imperfect field is kept, and the field keeps its text. No reference throws; nothing is invented, and no character replaces one that cannot be decoded. A provider's literal `<` and `&` stay text. One case changes a value that is an identifier: a DOI that holds `&#x110000;` or another reference to a non-character used to fail its whole record with `RangeError`. The DOI is now PubMed's text as written. That is the value `main` already returns for the well-formed spelling `&amp;#x110000;`. For a DOI request, the equivalence check of `doiLookup.ts` rejects such a record ("mismatch") and the lookup falls back to Crossref, so it cannot become another paper's DOI.
+**Malformed input.** A record that is unusable is still rejected as before, for example one without a title. A usable record with an imperfect field is kept, and the field keeps its text. No reference throws; nothing is invented, and no character replaces one that cannot be decoded. A provider's literal `<` and `&` stay text. Identifier values change in a few cases, all listed under [Publication identifiers (001B)](#publication-identifiers-001b). One of them: a DOI that holds `&#x110000;` or another reference to a non-character used to fail its whole record with `RangeError`. The DOI is now PubMed's text as written. That is the value `main` already returns for the well-formed spelling `&amp;#x110000;`. For a DOI request, the equivalence check of `doiLookup.ts` rejects such a record ("mismatch") and the lookup falls back to Crossref, so it cannot become another paper's DOI.
 
 ### Author provenance and identifier authority
 
 - `authors` and `author_provenance` stay aligned one-to-one. A collective name that is only markup still yields no author. One written only in CDATA, which `main` mangled, now yields its text.
 - Identifiers inside `AffiliationInfo` are still removed before author identifiers are read, so an institution's identifier never becomes the author's. An ORCID written in CDATA is now read as XML defines it.
-- PMIDs, DOI names, `canonicalDoiUrl`, provider selection and identifier classification are untouched. The DOI changes only in the two ways above: `&amp;lt;` inside a DOI is now the text `&lt;` rather than `<`, and a reference to a non-character no longer fails the record.
+- PMIDs, `canonicalDoiUrl`, the matching rule and identifier classification are untouched. **Corrected (001B):** this said that DOI names and provider selection are untouched and that the DOI changes only in two ways: `&amp;lt;` inside a DOI is now the text `&lt;` rather than `<`, and a reference to a non-character no longer fails the record. The decoder also keeps U+0000, lone surrogates and surrogate pairs written as references as text, and it can make two spellings of one record's DOI conflict. For a DOI request, that can move the answer between PubMed and Crossref. Every case is under [Publication identifiers (001B)](#publication-identifiers-001b).
 - `pubmedArticleIdentifiers.ts` was read-only for this work. Its comment that the shared decoder turns `&amp;lt;` into `<` is stale after this change and is left for its owner; its tests pass unchanged.
 
 ### Independent review: the Edge-to-client boundary (001A)
@@ -1764,7 +1764,7 @@ PMIDs, DOIs, URLs and years never pass through the decoder. `normalizePaperData`
 
 - **Provenance** is passed through untouched. It is stored only when it has as many entries as `authors`, and decoding never changes that count. Kind, order, name components, affiliations, author-level identifiers and ORCIDs are untouched, and no author identity or grouping code changed.
 - **Display and grouping keys** are computed from stored author strings. They are exactly as before for every string without an `&`, and for every string whose references are all valid and none forms another reference. Across the 1,400-record corpus, every stored author, display label and key is identical under the old and the new decoder. They differ only for a stored name that holds an out-of-range, NUL or unpaired-surrogate reference, or a sequence the old decoder read twice. The key then follows the one-level text. For example, `J&#xF6;rg M&#252;ller &#x110000;`, which the old fallback stored escaped, now keys like `Jörg Müller &#x110000;` and groups with it; `A &amp;lt; B` now keys as `a &lt; b`, no longer as `a < b`. No Production data was read, so how many stored names hold such sequences is unknown; ordinary names hold none. This was judged not to be a material change in grouping, and not to need a product decision.
-- **Identifiers.** The article DOI is decoded once, at the Edge, by the unchanged extractor, and never by the client. So `10.5555/Q2A&amp;amp;X` from PubMed is stored as `10.5555/q2a&amp;x`, and `10.1000/456#789` stays a DOI name whose resolver URL is `https://doi.org/10.1000/456%23789`. No export, DOI or PMID module can reach the decoder. Provider selection, PMID authority and deduplication are unchanged.
+- **Identifiers.** The article DOI is decoded once, at the Edge, by the unchanged extractor, and never by the client. So `10.5555/Q2A&amp;amp;X` from PubMed is stored as `10.5555/q2a&amp;x`, and `10.1000/456#789` stays a DOI name whose resolver URL is `https://doi.org/10.1000/456%23789`. No export, DOI or PMID module can reach the decoder. The client change leaves provider selection, PMID authority and deduplication unchanged. The Edge change does not, in a few malformed or doubly escaped cases; see [Publication identifiers (001B)](#publication-identifiers-001b).
 
 ### Release order (001A)
 
@@ -1780,8 +1780,169 @@ Vercel deploys the client when the PR merges, and the Edge Function needs its ow
 The totals differ because a record `main` loses counts as one failed check.
 
 - **B is safe.** For every record the corrected client reads `main`'s Edge output at least as well as the old client does. B follows a merge, and lasts until the Edge deploy, indefinitely if that deploy is never authorized.
-- **C** is the Draft as first proposed. For ordinary records it equals D. Its two regressions need a single field to hold both a stray `&`, `<` or CDATA section and a reference above U+10FFFF, which no well-formed record does. The stored text is then escaped, not deleted, and nothing is lost. C also stores the old client's cascade of CDATA reference text (`Literal <`), where `main` drops that text altogether. This was judged not material, but it is avoidable. **Deploy the Edge Function only after the corrected client has been in Production for at least a day**, so that open tabs have reloaded, and treat a reload as the remedy for a stale tab.
-- **No combination changes an identifier.** DOIs, PMIDs and URLs are the same in all four.
+- **C** is the Draft as first proposed. For ordinary records it equals D. Its two regressions need a single field to hold both a stray `&`, `<` or CDATA section and a reference above U+10FFFF, which no well-formed record does. The stored text is then escaped, not deleted, and nothing is lost. C also stores the old client's cascade of CDATA reference text (`Literal <`), where `main` drops that text altogether. This was judged not material, but it is avoidable. 001A therefore asked that the Edge Function be deployed only after the corrected client had been in Production for at least a day. **Superseded (001B):** nothing makes a stale tab reload, and what it stores stays stored, so revision 001B removed the regression from the Edge output instead; see [Release order (001B)](#release-order-001b).
+- **Corrected (001B):** this said that no combination changes an identifier, and that DOIs, PMIDs and URLs are the same in all four. That held for these records, and it holds for the client, which reads no identifier. It does not hold for the Edge; see [Publication identifiers (001B)](#publication-identifiers-001b).
+
+### Independent review: stale tabs, identifiers and the deployed baseline (001B)
+
+Review of revision 001A returned `PAPERLUME_CODEQL_EDGE_TEXT_EXTRACTION_001A_RELEASE_REVISION_REQUIRED`. It accepted the client decoder, its numeric policy, the tests and their oracle, and asked for three corrections. Revision `PAPERLUME-CODEQL-EDGE-TEXT-EXTRACTION-001B` makes them:
+
+- **Stale tabs.** State C, the corrected Edge read by a tab that loaded the old client, kept Example A's regression. The only protection was to wait a day before the Edge deploy, but nothing makes a tab reload, and what such a tab stores stays stored. The Edge output now reads the same in both clients; see [What the Edge writes for a stale tab](#what-the-edge-writes-for-a-stale-tab-001b).
+- **Identifiers.** "No combination changes an identifier" was too broad. The corrected Edge decoder reads the DOI `10.1000/a&amp;lt;b` as `10.1000/a&lt;b`, no longer as `10.1000/a<b`; see [Publication identifiers](#publication-identifiers-001b).
+- **The deployed baseline.** The matrix used `main` as the old Edge without reading what Supabase runs. That is now read; see [The deployed Edge baseline](#the-deployed-edge-baseline-001b).
+
+### What the Edge writes for a stale tab (001B)
+
+**Why the old decoder fails.** A tab opened before the Vercel release keeps `main`'s decoder, which is copied byte for byte into `fetch-paper-metadata/__tests__/fixtures/staleClientDecoder.ts`. It replaces hexadecimal references, then decimal ones, then `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and `&nbsp;`, each pass reading the previous pass's output. When `String.fromCodePoint` throws, it returns the whole field unchanged, and the Edge output has its stray `&` and `<` escaped, so the escapes are stored.
+
+**The reviewer's candidate, measured.** Writing an out-of-range reference with its `&` escaped (`&amp;#x110000;`) makes both decoders read it as the text `&#x110000;`. It and its extensions were measured with the exact decoders on 300,000 generated field contents in each of the three readings, 900,000 fields. "The target" is the approved lexer's reading decoded once by the independent `specDecode`:
+
+| Edge output | The old decoder gives up on the field | Worse than Production | Stores U+0000 or a lone surrogate | Differs from the target | Target changed |
+|---|---|---|---|---|---|
+| `main`, read by `main`'s client (Production) | 268,608 | — | 248,676 | — | — |
+| Revision 001A | 282,327 | 10,083 | 255,795 | 546,299 | — |
+| The candidate: `&` escaped above U+10FFFF | 1,344 | 8,464 | 395,326 | 434,985 | 0 |
+| … and for U+0000 | 1,344 | 4,796 | 230,715 | 285,730 | 0 |
+| … and a hexadecimal reference to `&` written `&amp;` | 0 | 4,796 | 231,118 | 282,856 | 0 |
+| … and every reference to `&` written `&amp;` | 0 | 4,796 | 231,118 | 281,926 | 0 |
+| … and unpaired surrogates escaped: **revision 001B** | **0** | **3** | **0** | 71,073, all the named cascade below | 0 |
+
+The candidate alone leaves two gaps. Both need adversarial input, and both are the defect class review found:
+
+- **A reference to `&` that builds another reference.** `&#x26;#1114112;` means the text `&#1114112;`. The old decoder's hexadecimal pass turns it into `&#1114112;`, and its decimal pass then reads that and throws. Written `&amp;`, which both decoders read as `&`, the `&` appears only after both numeric passes.
+- **Unpaired surrogates.** Without the fallback, the old decoder turns `&#xDC00;` into a lone surrogate, which a `jsonb` insert rejects. Before, the fallback had hidden that in fields that also held an invalid reference. Escaping such a reference needs to know whether a high surrogate's reference is followed directly by a low surrogate's in the output, because that is when the client combines them. A tag the output does not show does not separate them; a word boundary does.
+
+**What remains, and why the Edge cannot remove it.** The old decoder can never return the text `&lt;`, `&gt;`, `&quot;`, `&apos;` or `&nbsp;`. Its `&amp;` pass produces the `&` that the passes after it then read, and every other spelling of `&` is decoded earlier still. Production does the same to such text today. All 71,073 remaining differences are that cascade. The 3 fields worse than Production are one generated content in each reading, where `main` kept such a text only because its own fallback, set off by an out-of-range reference in the same field, returned the field untouched.
+
+**The rule.** It lives in `_shared/xmlText.ts`, the only production file 001B changes. A complete reference is still copied as written, except for three kinds of character reference:
+
+- one to U+0000 or above U+10FFFF has its `&` escaped;
+- so does one to a surrogate, unless it is a high half followed directly by a low half, or that low half;
+- one to `&` is written `&amp;`.
+
+So no character reference in the output names a value a decoder could reject, and no decoder can assemble one from it.
+
+**What was decoded before decodes the same.** Both decoders that read this output keep those references as text: the client by its numeric rule, the Edge's own decoder by XML 1.0's `Char` rule. Both read `&#x26;` and `&amp;` alike, and both read one reference at a time.
+
+- On the 900,000 fields, the target never changed.
+- The function's author fields, which `pubmedAuthors.ts` decodes at the Edge, gave the same text on 300,000 generated author fields, 248,885 of which had a rewritten reference.
+- The article DOI and the keywords do not use the lexer.
+- The committed lexer equals the measured variant on another 300,000 generated contents, with and without word boundaries.
+
+**Alternatives not taken.**
+
+- **Escaping every numeric reference** would change the target, for example for `&#1;` and `&#xFFFE;`, which the client decodes.
+- **Escaping every surrogate reference** would leave `&#55349;&#56320;` as text, where `main` and the target give U+1D400.
+- **Pairing by position in the source** would do the same to a pair split by an inline tag.
+- **Re-encoding every reference in one canonical form** would be a new representation contract. A version field or a forced reload would be a new protocol. Neither is authorized.
+- **Doing it in `metadataText.ts`** would need a second pass over the lexer's output.
+
+### Release order (001B)
+
+The matrix now has six combinations: the four of 001A, and the 001B Edge read by either client. The records are the same as before: 42 targeted, 29 adversarial and the 1,400-record ordinary corpus. "Better" and "worse" compare each field check with Production (A):
+
+| State | Edge | Client | Targeted checks ok | Adversarial checks ok | Against A | Records the Edge loses: targeted, adversarial | Stored records with U+0000 or a lone surrogate: targeted, adversarial | Ordinary corpus |
+|---|---|---|---|---|---|---|---|---|
+| A | `main` | `main` | 73 of 111 | 21 of 52 | — | 6, 2 | 2, 3 | — |
+| B | `main` | revision | 75 of 111 | 42 of 52 | 23 better, none worse | 6, 2 | 2, 0 | identical to A |
+| C, 001A | 001A | `main` | 112 of 121 | 26 of 57 | 46 better, 2 worse | 1, 0 | 2, 3 | identical to D |
+| D, 001A | 001A | revision | 115 of 121 | 54 of 57 | 75 better, none worse | 1, 0 | 0, 0 | 65 Crossref abstracts gain word spaces |
+| C, 001B | 001B | `main` | 113 of 121 | 41 of 57 | 60 better, none worse | 1, 0 | 2, 0 | identical to D |
+| D, 001B | 001B | revision | 115 of 121 | 54 of 57 | 75 better, none worse | 1, 0 | 0, 0 | identical to D, 001A, record for record |
+
+The totals differ because a record `main` loses counts as one failed check. The one targeted record lost in every state is a title that is only markup, which is rejected by design. A stored record with U+0000 or a lone surrogate is one that `safe_bulk_insert_papers` would reject, with its batch, by PostgreSQL's documented `jsonb` rules.
+
+- **The two Example A checks** of C, 001A, are ok in C, 001B. A stale tab is worse than Production nowhere.
+- **Its 16 remaining misses.** Against D, C (001B) misses 16 checks. 9 are the old decoder's named cascade. The other 7 are fields the Edge does not lex: keywords, journal, MeSH terms, substances, study type, personal names and a Crossref title. A stale tab reads those exactly as Production does now.
+- **The two stored records** of C (001B) that hold such a character are the same two as in A, and in both the character is in the keywords. The Edge decodes keywords itself and keeps `&#0;` and `&#xD800;` as text, and the old decoder's second decode then produces the characters, as Production's old Edge did directly. That is the keyword path of Q3.
+- **The one check ok in C (001B) but not in D** is an adversarial collective name, `Beta &#x110000; &amp; Gamma Group`. The new client decodes that Edge-decoded name a second time (Q3), and the old decoder's fallback happens to skip it.
+- **Ordinary records.** Every one of the 1,400 has the same Edge response under 001A and 001B, and the same stored record under either client.
+
+**No waiting period is needed.** With 001B no state is worse than Production, so neither the order of the two deploys nor the time between them is a correctness mechanism. Merging first and deploying the Edge later remains the plan, because a stale tab still reads `&amp;lt;` as `<` against either Edge, and every reload moves a tab to the target. Time between the deploys is an optional precaution. 001A's "at least a day" is withdrawn.
+
+### Publication identifiers (001B)
+
+**Correction.** 001A said that no combination changes an identifier, with DOIs, PMIDs and URLs the same in all four. That held for its records, none of which had a nested or invalid reference in a DOI. It is true of the client, whose decoder never reads a DOI, PMID or URL. It is not true of the Edge: the Q2 Edge decoder changes some DOIs, by design. Revision 001B changes none, since the DOI does not use the lexer, and all 30 identifier results below are identical under 001A and 001B.
+
+**What was traced.**
+
+- On the Edge: `pubmedArticleIdentifiers.ts` (the article's own DOI, decoded once by `htmlEntities.ts`), `identifierDetection.ts` (`canonicalDoiUrl` and `doiNamesAreEquivalent`), `doiLookup.ts` (PubMed candidates, the Crossref fallback and enrichment) and `index.ts`.
+- On the client: `normalizePaperData` (prefix, trimming and lower case), `metadataAttribution.ts` (which requested identifier a result answers) and the `lower(doi)` duplicate index.
+
+Synthetic records under the unregistered `10.5555` test prefix ran through the real handler of `main` and of the revision, then through the client:
+
+| PubMed `ArticleId` | `main` | Revision | Class |
+|---|---|---|---|
+| Ordinary; `&amp;`; numeric references; `&#x1D400;`; `#` and `?`; SICI `&lt;…&gt;`; two equivalent spellings; two conflicting DOIs; only a cited DOI | DOI, resolver URL, provider, PMID and label | identical | ordinary: unchanged |
+| `10.5555/q2b.n&amp;lt;1`, and likewise `&#38;lt;` and `&#x26;#60;` | `10.5555/q2b.n<1`, URL `…n%3C1` | `10.5555/q2b.n&lt;1`, URL `…n&lt;1` | intended correction: the DOI name the XML states |
+| `…c&amp;lt;6` and `…c&lt;6` in one record | `…c<6`: one DOI after the cascade | no DOI: two different names | intended correction, under the existing conflict rule |
+| `…oor&#x110000;` | the record lost: "Could not find paper metadata" | the record, with the DOI as written | record recovered; malformed DOI kept |
+| `…nul&#0;`, `…lone&#xD800;` | a DOI holding U+0000 or a lone surrogate, which a bulk insert rejects; URL `…%00` or `…%EF%BF%BD` | the DOI as written | malformed DOI kept, now storable |
+| `…pair&#xD835;&#xDC00;` | U+1D400 | both references as written | XML forbids references to surrogates; malformed DOI kept |
+| A keyword or a collective author holding `&#x110000;` | the record lost | the record | record recovered |
+
+For DOI requests:
+
+| Requested DOI | PubMed's record | `main` answers with | Revision answers with |
+|---|---|---|---|
+| `…n<1` | DOI written `…n&amp;lt;1` | PubMed, PMID 91000203 | Crossref, without the PMID: PubMed's record names `…n&lt;1` |
+| `…n&lt;1` | DOI written `…n&amp;lt;1` | nothing: Crossref has no such DOI | PubMed, PMID 91000203 |
+| `…kw` | a keyword holding `&#x110000;` | Crossref: the PubMed parse threw | PubMed |
+| `…oor` | DOI written `…oor&#x110000;` | Crossref | Crossref |
+| an astral DOI (U+1D400) | DOI written `&#xD835;&#xDC00;` | PubMed | Crossref |
+| `10.5555/Q2B.E<8`, which Crossref resolves as `…e<8` | enrichment candidate written `…e&amp;lt;8` | Crossref, enriched with PubMed's PMID | Crossref, not enriched |
+| ordinary, in upper case, or Crossref only | | unchanged | unchanged |
+
+**What does not change.**
+
+- **The client reads no identifier.** `normalizePaperData` copies the DOI, removing a resolver or `doi:` prefix, trimming it and lower-casing it. PMIDs and URLs are copied.
+- **No PubMed record is accepted for a DOI it does not name.** `doiLookup.ts`'s equivalence check is unchanged; it now compares the name PubMed states.
+- **PMIDs and PubMed URLs** are unchanged. So are Crossref DOIs, which arrive as JSON and are never decoded.
+- **`canonicalDoiUrl`** is unchanged, and encodes whatever name it is given.
+- **The duplicate rules** are unchanged: `lower(doi)` in the database, `doiEquivalenceKey` for labels.
+
+**Consequences to know.** A PubMed record whose XML writes its DOI doubly escaped no longer answers for the unescaped DOI, or enriches it. A library holding that paper under the unescaped spelling will not detect it as a duplicate by DOI; the PMID still matches. That is the corrected reading of the provider's data, not a new matching rule.
+
+**Questions for the owner, not defects.**
+
+1. Should an article DOI that still holds a reference the decoder keeps as text (`&#x110000;`, `&#0;`, surrogate references) be stored as written, as now, or treated as no DOI? Its resolver URL leads nowhere. A change would belong in `pubmedArticleIdentifiers.ts`, outside this revision.
+2. Should a doubly escaped provider DOI be repaired? The old cascade did that by accident, and it would also turn a real `&lt;` in a DOI name into `<`.
+
+Unchanged and outside this work: the client lower-cases a stored DOI with JavaScript's full Unicode `toLowerCase()`, and the database compares `lower(doi)`, while DOI equivalence folds ASCII letters only (DOI Handbook §4.3.4).
+
+### The deployed Edge baseline (001B)
+
+Read at 07:56 UTC on 2026-11-28, with the repository's Supabase CLI 2.111.0 and only these two read-only calls:
+
+- `supabase functions list --project-ref lioxtgiputfniqbktcsz -o json`, before and after;
+- `supabase functions download fetch-paper-metadata --project-ref lioxtgiputfniqbktcsz --use-api --workdir <a new, empty scratch directory>`. With `--use-api`, the source is unbundled on Supabase's side rather than in Docker, and the command writes only into the work directory. The repository was not the work directory.
+
+The two lists were identical in every field of all seven functions, so the reads changed nothing.
+
+| Property | Deployed |
+|---|---|
+| Project | `lioxtgiputfniqbktcsz` |
+| Function | `fetch-paper-metadata`, id `7e682b6d-b91b-4d36-9668-fc40a77b2f27`, ACTIVE |
+| Version | 26, a counter: installing `CONSENSUS_API_KEY` on 2026-10-09 moved it from 25 without a redeploy ([deployment.md](deployment.md)) |
+| Last deploy | `updated_at` 2026-10-03T06:39:17.032Z, from the PR #335 deploy worktree named in `entrypoint_path`; PR #335 merged as `7f4b2407` |
+| Bundle hash (`ezbr_sha256`) | `9176df70b6129ad8d8be5dc0e6b9e3942542bd0c745a333fb4cce54618b53170` |
+| Authentication | `verify_jwt` false, as in `supabase/config.toml`; the source checks the caller with `supabase.auth.getUser()`, line 565 of `index.ts` on `main` |
+| Import map | none |
+| Source | 14 files, each byte-identical to `main` `4c454769` and to `7f4b2407`. They are exactly `main`'s recursive local import closure, with no extra or missing file |
+| Remote imports | `https://esm.sh/@supabase/supabase-js@2`, a floating major version, and the line-1 type reference to `https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts`, unversioned |
+
+Since `7f4b2407`, `main` has changed only Consensus files under `supabase/functions/_shared/`, and none of them is in this closure.
+
+**What this means for the merge.** After the merge, the corrected client talks to this function. Its source is the `main` Edge that the matrix used as the old one, so state B is what users get until an Edge deploy, and B is worse nowhere. The remote client library carries only authentication and the profile read, not text extraction.
+
+**Rollback artifact.** The download equals `main`'s closure byte for byte, so `git archive 4c454769 supabase/functions` with `supabase/config.toml` is a durable copy of the deployed source. The scratch copy is not kept. A redeploy from it rebuilds the bundle and resolves `supabase-js@2` again at that time, so it restores the source, not necessarily the same bundle hash. No rollback was performed or rehearsed.
+
+**Disposition: `DEPLOYED_EDGE_BASELINE_VERIFIED_WITH_LIMITATIONS`.**
+
+- **Verified:** the project and function identity; the metadata above, as the Management API reports it; source and closure equivalence with `main`; and the authentication configuration.
+- **Not verified:** which `supabase-js` 2.x and other remote modules the bundle holds, since the download returns local source only; the hosted runtime and its Deno version; and hosted authentication, since no Production request was made.
+
+None of the limitations affects the merge, for the reason above.
 
 ### Evidence
 
@@ -1902,6 +2063,50 @@ The totals differ because a record `main` loses counts as one failed check.
   The callback makes valid-heavy input slower than `main`'s native replacements, but a real abstract of a few thousand characters takes well under a millisecond. The quadratic author and record patterns of the Edge are unchanged and stay on the Edge backlog.
 - **Deno.** No Edge source changed in the revision: the 16 modules of `fetch-paper-metadata`'s closure are byte-identical to the Draft's, so the Deno 2.1.4 check and test runs and the Edge runtime run below still apply to them. They were not repeated. The new Edge-side test suite runs in Vitest only. A strict `tsc` pass over the Edge modules and all Edge suites, the new one included, reported 0 diagnostics; CI does not type-check `supabase/functions/**`.
 
+### Evidence (001B)
+
+- **Tests.** 141 new tests and 8 changed expectations, all in the Edge suites:
+  - `_shared/__tests__/xmlText.test.ts`, 89 more. They cover the 27 hand-written vectors of the new rule, in `DECODER_NEUTRAL_VECTORS`; 21 rewritten references, each of which decodes exactly as before in both decoders; 27 references that are still copied as written; 3 more decoding rows; and 11 bounded-work tests, one of which checks that a 100,000-digit reference's value is read only a few digits deep;
+  - `_shared/__tests__/pubmedAuthorsText.test.ts`, 5 more: collective names holding each rewritten kind decode at the Edge exactly as before;
+  - `fetch-paper-metadata/__tests__/staleClientCompatibility.test.ts`, 16, new. It tests state C with `main`'s decoder, copied byte for byte (git blob `d2d9b39e`) and swapped into the real `normalizePaperData`. It covers Example A in all three fields, the 001A representation that made it fail, the other references the old decoder read differently, the named cascade that remains, and 4,000 generated contents per field;
+  - `fetch-paper-metadata/__tests__/identifierQualification.test.ts`, 31, new: the article DOI, its resolver URL and its stored form for each case above, several own DOIs, matching, the DOI lookup's choice of provider, and the client's labels.
+
+  **Changed expectations.** Eight tests asserted the Edge representation of `&#x110000;`: Example A in four fields and Example C in two in `edgeClientDecoding.test.ts`, a Crossref row in `metadataText.test.ts`, and the "copied as written" vector of `xmlTextVectors.ts`. Each now expects `&amp;#x110000;`. The stored text the same rows assert is unchanged, and no other expectation changed.
+- **Failing before, passing after.** With 001A's `xmlText.ts` put back, 61 of the 4,395 focused tests fail, 53 of them new; with 001B none fails. In the matrix, the two Example A checks of state C move from worse than Production to ok.
+- **Negative controls.** The 19 client and 27 Edge controls of 001A were rebuilt on 001B, and 20 new controls target it, each made by asserted replacements in a scratch tree. The 4,395 focused tests ran in every tree. The unmodified tree passed all of them, with no timeout, and every control failed:
+
+  | 001B control | Failing, of 4,395 | In new tests | In changed tests | In unchanged tests |
+  |---|---|---|---|---|
+  | 001A's `xmlText.ts` (failing before) | 61 | 53 | 8 | 0 |
+  | References above U+10FFFF copied | 31 | 23 | 8 | 0 |
+  | U+0000 copied | 10 | 10 | 0 | 0 |
+  | References to `&` copied | 13 | 13 | 0 | 0 |
+  | Only hexadecimal references to `&` rewritten | 8 | 8 | 0 | 0 |
+  | Surrogates copied | 20 | 20 | 0 | 0 |
+  | Surrogate pairs escaped too | 8 | 7 | 0 | 1 |
+  | Removed markup separating a pair | 3 | 3 | 0 | 0 |
+  | A word boundary not separating a pair | 1 | 1 | 0 | 0 |
+  | A high half at the end not settled | 10 | 10 | 0 | 0 |
+  | Later output not settling a pending high half | 8 | 8 | 0 | 0 |
+  | Every numeric reference escaped | 33 | 24 | 1 | 8 |
+  | CDATA text escaped twice | 27 | 3 | 0 | 24 |
+  | Entity references escaped as well | 62 | 14 | 5 | 43 |
+  | The lexer's output read again, `&amp;#` turned back into `&#` | 61 | 50 | 8 | 3 |
+  | A long reference taken to be out of range by its length | 2 | 2 | 0 | 0 |
+  | No early stop when reading a value | 1 | 1 | 0 | 0 |
+  | The article DOI decoded twice | 13 | 9 | 0 | 4 |
+  | Conflicting own DOIs accepted | 2 | 1 | 0 | 1 |
+  | Every PubMed candidate accepted for a DOI | 12 | 5 | 0 | 7 |
+
+  The 001A controls still fail. Each Edge control fails at least as many tests as in Q2. Each client control fails at least as many as in 001A, except one: the restored whole-field fallback now fails 27 tests, not 34, because Example A no longer reaches that fallback, which is the point of this revision. "No early stop" was the one control the first run did not catch, because reading every digit again changes no result and is still linear; the digit-read test above was added for it.
+- **Differential.** See [Release order (001B)](#release-order-001b) and [Publication identifiers (001B)](#publication-identifiers-001b). The 001A scores reproduce exactly: 73 of 111 and 21 of 52 on `main`, and 115 of 121 and 54 of 57 for the target. The nine misses Q2 attributed to the client keep their 001A statuses: three resolved, one partly resolved and five remaining, all of the five the second decode of Q3. 001B changes none of them in state D. In state C it moves X10-invalid-ref, the Crossref abstract, from a miss to ok.
+- **Resource bounds.** Besides the counted tests, median times at ×1, ×2, ×4 and ×8 grew between 6.3 and 10.0 times, which is linear. On reference-heavy hostile input 001B takes up to five times as long as 001A, because each such reference is written separately: 22 ms for 2,000,000 characters of `&#x110000;`. A valid abstract of 9,900,000 characters takes 64 ms against 51 ms. The development machine's load average was about 4.
+- **Deno and the Edge runtime.** The images `denoland/deno:2.1.4` and `public.ecr.aws/supabase/edge-runtime:v1.74.3` were already on the machine, so nothing was pulled. Docker was started for these runs and stopped afterwards, and every container ran with no network.
+  - **`deno check`** (strict): 0 diagnostics for the pure modules (9 on `main`, 11 on 001A and 001B) and for `index.ts` with `supabase-js` 2.93.3 from the repository. Three injected type errors were all reported, one on the real `SupabaseAuthClient` type.
+  - **`deno info`**: `fetch-paper-metadata` keeps its 16 local modules. No other function's closure holds `xmlText.ts` or `metadataText.ts`, so no other function is affected.
+  - **`deno test`**: 139 of 139, covering the four vector tables and the stale-tab, author-invariance and runtime properties.
+  - **The Edge runtime** ran the real handler of `main` and of 001B on 25 request scenarios: the targeted, adversarial and identifier sets. Every status, handler header and body equalled the Node run's. The two versions differed in the same 346 result fields as in Node. The only database read was `profiles.pubmed_api_key` for the synthetic user, and there were no boot errors.
+
 ### Local Edge runtime run
 
 The real request handler ran in the local Supabase Edge runtime image `public.ecr.aws/supabase/edge-runtime:v1.74.3` (Deno 2.1.4), once from `main` and once with the fix, in a container with no network.
@@ -1955,6 +2160,17 @@ On the revision's code commit `dcec01f6` (tree `ab6a9b7d`), in the repository ch
   - Across all JavaScript, the URL hosts (18), RPC names (37), table names (26), the storage bucket and the Edge Function names invoked are the same.
   - `package.json`, `package-lock.json`, `supabase/config.toml`, `vercel.json` and both Vite configurations are byte-identical.
 
+### Local validation (001B)
+
+On the code commit `afad0846` (tree `f3edea46`), in the repository checkout on 2026-11-28, with the development machine's load average between 4 and 12:
+
+- **Install and audits.** `package.json` and `package-lock.json` are unchanged. A fresh `npm ci` in a clean tree passed, `npm ls --all` reports no problem, and `npm audit` finds 0 full and 0 production findings.
+- **Lint and types.** Lint reports 0 errors and the same 18 warnings, none in a changed file. The three typechecks pass. A strict `tsc` pass over 20 Edge modules and suites, which CI does not type-check, reported 0 diagnostics.
+- **Vitest.** 285 files and 10,129 tests passed on the first run, against 283 and 9,988 on 001A; the difference is the two new files and the 141 new tests.
+- **Previous releases.** The CSV security (111), RIS integrity (150), BibTeX integrity (114), BibTeX codec (155) and round-trip (51) suites pass with unchanged counts.
+- **The extension.** `npm run test:extension:browser` passes 30 of 30.
+- **Build comparison.** The Extension-qualified commit `72ba7279`, the 001A head `c32309ac` and this commit were built from clean `git archive` trees, with one fresh `npm ci` and the same placeholder environment. All 18 artifacts of the web build, the extension build and the packaged extension are byte-identical across the three, among them the entry chunk `index-D9nthVvX.js`, the normalization worker and the archive `0feb935d…`. Between `72ba7279` and this commit, nothing under `src/`, `extension/`, `public/` or `scripts/` changed, and neither did the package files, the Vite configurations, `vercel.json`, `index.html` or `supabase/config.toml`.
+
 ### CodeQL (Q2)
 
 The change removes the expressions the five alerts point at: the single-pass `<[^>]+>` removals in `plainText`, the title, the abstract and the Crossref chain, and the replacement sequence in `decodeHTMLEntities`. It adds no code of either kind: the decoder is one `replace` with a callback, and the lexer reads the input once. That is what makes it correct, not a way of hiding a pattern from the query. The only `replace` calls added are the decoder and a three-character escape of CDATA text.
@@ -1967,12 +2183,12 @@ If the analysis of `main` after a merge closes alerts 2–6 and 8, 4 would remai
 
 Not done, and not authorized by this work.
 
-- **Order (001A).** Merge, let Vercel deploy the corrected client, and only then, separately authorized, deploy the Edge Function, at least a day later; see [Release order](#release-order-001a). The client half needs no Supabase step. Reverting the merge commit would redeploy the old client through Vercel, but it would not touch a deployed Edge Function.
+- **Order.** Merge, let Vercel deploy the corrected client, and then, separately authorized, deploy the Edge Function. Since 001B neither the order nor the time between them is needed for correctness, and 001A's one-day wait is withdrawn; see [Release order (001B)](#release-order-001b). The client half needs no Supabase step. Reverting the merge commit would redeploy the old client through Vercel, but it would not touch a deployed Edge Function.
 - **Scope.** `fetch-paper-metadata` is the only function whose closure contains the changed modules: no other function imports `htmlEntities.ts`, `pubmedAuthors.ts`, `pubmedArticleIdentifiers.ts` or the two new files. So exactly one function needs a deploy. `verify_jwt = false` stays, because the function verifies the caller itself with `getUser()`.
-- **Baseline.** `DEPLOYED_EDGE_BASELINE_NOT_VERIFIED`: the deployed `fetch-paper-metadata` was not downloaded or compared with `main` for this work. The repository records it at v25 until 2026-10-09, when installing `CONSENSUS_API_KEY` advanced its version counter to v26 without a redeploy (see [deployment.md](deployment.md)). Which commit its source matches, and whether it equals `main`'s 14-module closure, is not established here.
+- **Baseline (001B).** `DEPLOYED_EDGE_BASELINE_VERIFIED_WITH_LIMITATIONS`. The deployed function is v26, last deployed on 2026-10-03 from PR #335; its 14 files are byte-identical to `main`'s closure. Its bundled remote modules and the hosted runtime were not visible to the reads. See [The deployed Edge baseline](#the-deployed-edge-baseline-001b). Until then this said `DEPLOYED_EDGE_BASELINE_NOT_VERIFIED`.
 - **Before a deploy.**
   - Read the deployed version.
-  - Download its source with `supabase functions download fetch-paper-metadata --use-api` into a scratch work directory, and compare it file by file with `main` at the deploy commit. Keep it as the rollback artifact.
+  - Download its source again with `supabase functions download fetch-paper-metadata --use-api` into a scratch work directory, and compare it file by file with `main` at the deploy commit. Keep it as the rollback artifact.
   - Confirm the project reference and that the required variables `SUPABASE_URL` and `SUPABASE_ANON_KEY` exist, by name only.
 - **Deploy.** Deploy that one function from a clean checkout of the merged commit. Then download the new version, check that it is exactly the 16-file closure, byte for byte, and check that its version and update time moved.
 - **Afterwards.** Check OPTIONS, a 401 without authorization, and one signed-in import of a PMID and of a DOI with the acceptance account.
@@ -1986,7 +2202,8 @@ Not done, and not authorized by this work.
 - **Real authentication.** `getUser()` and `supabase-js` were stood in for, locally, by a stub that accepts one synthetic token; GoTrue's token validation did not run. The handler's own auth branches did run, and its auth code is unchanged.
 - **The Crossref format** of the REST API's `abstract` string is inferred from the deposit guide and the fixtures, not from a published response schema.
 - **Stored data (001A).** No stored record was read, so how many stored author names hold the sequences whose grouping key changes is unknown. Nothing rewrites stored records.
-- **Open tabs (001A).** How long tabs stay open on a stale bundle was not measured; the one-day margin is a judgement.
+- **Open tabs.** How long tabs stay open on a stale bundle was not measured. Since 001B no stale tab stores worse text than Production, so nothing depends on it.
+- **The deployed bundle (001B).** The deployed function's source was compared with `main`. Its bundled remote modules, the hosted runtime and hosted authentication were not.
 - **PostgreSQL (001A).** That NUL and unpaired surrogates fail a `jsonb` insert is taken from the PostgreSQL documentation; no local database ran during the revision.
 
 ### Limitations not changed here
@@ -1994,6 +2211,7 @@ Not done, and not authorized by this work.
 - **Repeated decoding (Q3).** The client decoder now decodes once and isolates malformed references, but keywords and collective names are still decoded twice, at the Edge and in `normalizePaperData`; the list view decodes the first three author names a third time with HTML's own rules; and `normalizeAuthorDisplay` decodes stored names again at read time.
 - **CSV list columns.** The CSV parser splits the authors, keywords, MeSH and substances columns at `;` before anything is decoded, so a reference inside one of those values is cut in two. The parser is unchanged.
 - **Doubly escaped provider text.** The old cascade turned a provider's doubly escaped `&amp;lt;` into `<`. It now stays one level escaped, `&lt;`, which is what the source says.
+- **Stale tabs and named references (001B).** A tab still running the old decoder turns `&amp;lt;` into `<` whatever the Edge sends, and Production does the same today. The fields the Edge does not lex (keywords, journal, MeSH terms, substances, personal names and Crossref titles) reach such a tab exactly as they reach Production. In the keyword path, the old decoder's second decode can still produce U+0000 or a lone surrogate from `&#0;` or `&#xD800;` (Q3).
 - **Quadratic author patterns.** The author patterns of `pubmedAuthors.ts` (`<Author…>…</Author>`, affiliations, identifiers) and the record patterns of `pubmedArticleIdentifiers.ts` keep their lazy `[\s\S]*?` form, which can cost quadratic time on a hostile record within the 2 MiB cap. That was measured for unclosed `<Author>` tags above. They were kept character for character to preserve the author projection and the DOI rules.
 - **Keywords with markup** are still skipped, because the keyword pattern takes text-only elements, although the DTD allows `%text;` and MathML there.
 - **Other abstracts.** `OtherAbstract` elements, translations and plain-language summaries are still joined into the abstract, because selection was not changed.
@@ -2005,12 +2223,13 @@ Not done, and not authorized by this work.
 
 Each item is separate work, and none of it is part of this change:
 
-- **The guarded deploy of `fetch-paper-metadata`**, with the prerequisites above, after the corrected client has been live for at least a day.
+- **The guarded deploy of `fetch-paper-metadata`**, with the prerequisites above, after the merge.
 - **The rest of Q3:** deciding whether keywords and collective names should be decoded once, at the Edge or in the client, given that the same fields carry file and manual input; the list view's `<textarea>` decoder; read-time decoding of stored author names; and the guard against HTML sinks.
 - **CodeQL group Q4**; see the [CodeQL triage outcome](#codeql-triage-outcome-2026-11-23).
 - **Linear author and record patterns** for PubMed XML, with an equivalence proof for the author projection and the DOI rules.
-- **Pinning the Edge `supabase-js` import**, and checking what the deployed bundle contains.
+- **Pinning the Edge `supabase-js` import**, and reading which version the deployed bundle holds; 001B read its source only.
 - **The stale decoder comment** in `pubmedArticleIdentifiers.ts`.
+- **The two identifier questions** under [Publication identifiers (001B)](#publication-identifiers-001b), for the owner.
 - **E2E runtime reliability**, as listed under RIS record integrity.
 - **Superseded Dependabot pull requests.** PRs 351–354 are still open.
 
